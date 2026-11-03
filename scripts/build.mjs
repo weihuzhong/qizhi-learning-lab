@@ -1,0 +1,10 @@
+import {mkdir,writeFile,copyFile,readFile} from 'node:fs/promises';
+const vendors={};
+for(const [source,target] of [['pptxgen.bundle.js','pptx.js'],['docx.iife.js','docx.js']])vendors['/vendor/'+target]=await readFile('worker/vendor/'+source,'utf8');
+await writeFile('worker/assets.js','export const vendorAssets='+JSON.stringify(vendors)+';\n');
+const {default:worker}=await import('../worker/index.js');
+await mkdir('public/vendor',{recursive:true});
+const page=await worker.fetch(new Request('https://build.invalid/'),{});
+if(!page.ok)throw Error('Homepage build failed');
+await writeFile('public/index.html',await page.text());
+for(const [source,target] of [['pptxgen.bundle.js','pptx.js'],['docx.iife.js','docx.js']])await copyFile('worker/vendor/'+source,'public/vendor/'+target);
