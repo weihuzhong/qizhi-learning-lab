@@ -1,0 +1,3 @@
+// Public verification material only; signing key stays on the execution service.
+export const pptWorkerPublicKey="-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqcfhQd8XljhsIQddGrhL\npAvqSOLb12P6e7vAiCMnE1M+5w3YYzsaMNt+y+63SZLlT8yRZ0CfU3VvzDxpO/+a\nvthfdHCUat7wrezADlEDT/dn2UjL7039oIOSkl2myDlQlRP4/7EnPouKfgCNyCer\n5Ts824jg1aeG0UQfSTl/lNftspt22Ucyky0KNYGbfyx/HTwH3MySh05iCHSA9nIg\niPaPGU24cfpWk1SWv+DVnpyXepAFQp3whvPIC2iFRrYxuEOmWwbA2k9jWh3xrTmx\nN441aB2utMn+8py51SYtpq41iF0Em0zGbgEkpbabfS8V9ah9x/+BIB8JxCsllaKp\nWwIDAQAB\n-----END PUBLIC KEY-----\n";
+export const pptRunnerURL='';
