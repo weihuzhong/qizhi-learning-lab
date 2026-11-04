@@ -1,3 +1,4 @@
+import {validateDocumentReview} from '../worker/document-review.js';
 import {randomBytes,scrypt as rawScrypt,timingSafeEqual,createHash} from 'node:crypto';
 import {promisify} from 'node:util';
 import {validateOutline,validatePhase} from '../worker/staged-api.js';
@@ -49,10 +50,11 @@ export function createCloudApi(store){
  }
  if(path==='/api/cloud/team/get'){const w=await workspace(b.id,u);return reply({team:publicTeam(w,u)});}
  if(path==='/api/cloud/team/invite'){const old=await workspace(b.id,u);if(old.owner!==u.id)fail('仅组长可更新邀请码',403);const secret=randomBytes(16).toString('hex');await update('teams/'+b.id,w=>({...w,inviteHash:hash(secret)}));return reply({invite:b.id+'.'+secret});}
- if(['/api/cloud/team/publish','/api/cloud/team/message','/api/cloud/team/remove'].includes(path)){
+ if(['/api/cloud/team/publish','/api/cloud/team/message','/api/cloud/team/remove','/api/cloud/team/document'].includes(path)){
  await workspace(b.id,u);const w=await update('teams/'+b.id,w=>{
  if(!w?.members.some(m=>m.id===u.id))fail('无访问权限',403);
- if(path.endsWith('publish')){
+ if(path.endsWith('document')){if(typeof b.text!=='string'||!b.text.trim()||b.text.length>18000)fail('文档正文无效');validateInput(()=>validateDocumentReview(b.report,b.text));w.documents ||= [];if(w.documents.length>=30)fail('最多保存30份教研文档');w.documents.unshift({id:randomBytes(12).toString('hex'),name:str(b.name,160),text:b.text,report:b.report,author:u.name,authorId:u.id,createdAt:new Date().toISOString()});}
+ else if(path.endsWith('publish')){
  const items=b.items;if(!Array.isArray(items)||!items.length||items.length>20||w.lessons.length+items.length>40)fail('一次可提交1至20份，组内最多40份教案，请归档后再上传');
  for(const item of items){validateInput(()=>validateLesson(item.lesson));if(JSON.stringify(item).length>70000)fail('单份备课包过大');const brief=Object.fromEntries(['topic','grade','subject','minutes','prior','resources','learners','context','requirements'].map(k=>[k,k==='minutes'?Number(item.brief?.[k])||40:str(item.brief?.[k],1800)]));w.lessons.unshift({id:randomBytes(12).toString('hex'),authorId:u.id,author:u.name,lesson:item.lesson,brief,createdAt:new Date().toISOString(),source:str(item.source,120)});}
  }else if(path.endsWith('remove')){const item=w.lessons.find(x=>x.id===b.lessonId);if(!item)fail('教案不存在',404);if(item.authorId!==u.id&&w.owner!==u.id)fail('仅作者或组长可移除教案',403);w.lessons=w.lessons.filter(x=>x.id!==b.lessonId);}

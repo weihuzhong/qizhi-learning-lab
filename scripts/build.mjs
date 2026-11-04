@@ -13,3 +13,8 @@ await writeFile('public/index.html',await page.text());
 for(const [source,target] of [['pptxgen.bundle.js','pptx.js'],['docx.iife.js','docx.js']])await copyFile('worker/vendor/'+source,'public/vendor/'+target);
 
 await writeFile('public/vendor/zip.js',vendors['/vendor/zip.js']);
+
+await mkdir('public/media',{recursive:true});
+await copyFile('worker/media/classroom-cover.jpg','public/media/classroom-cover.jpg');
+
+await copyFile('worker/media/paper-bridge.jpg','public/media/paper-bridge.jpg');

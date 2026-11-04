@@ -9,3 +9,5 @@ public/
 worker/assets.js
 
 .openai/
+
+qa-output/
