@@ -7,3 +7,5 @@ public/
 *.log
 .DS_Store
 worker/assets.js
+
+.openai/

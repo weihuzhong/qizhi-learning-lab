@@ -3,6 +3,7 @@ const reply=(value,status=200)=>Response.json(value,{status,headers:{'cache-cont
 export function validateLesson(p){
  if(!p||typeof p!=='object'||typeof p.title!=='string'||p.title.length>160)throw Error('教案标题无效');
  for(const k of ['objectives','preparation','assessment','differentiation','board','homework','reflection','sources'])if(!Array.isArray(p[k])||p[k].length>20||p[k].some(x=>typeof x!=='string'||x.length>1800))throw Error('教案字段无效：'+k);
+ for(const k of ['keypoints','difficulties'])if(p[k]!==undefined&&(!Array.isArray(p[k])||p[k].length>20||p[k].some(x=>typeof x!=='string'||x.length>1800)))throw Error('重点或难点格式无效');
  if(!Array.isArray(p.phases)||p.phases.length<2||p.phases.length>10)throw Error('课堂环节须为2至10个');
  let total=0;for(const x of p.phases){if(!Number.isInteger(x.minutes)||x.minutes<1||x.minutes>120)throw Error('课时分配无效');total+=x.minutes;for(const k of ['name','teacher','student','check'])if(typeof x[k]!=='string'||x[k].length>2000)throw Error('课堂环节字段无效');}
  if(total>120)throw Error('课堂时间超过120分钟');return p;

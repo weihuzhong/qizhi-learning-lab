@@ -1,3 +1,4 @@
+import {stagedApi} from './staged-api.js';
 import {modelOptions,modelError} from './model-provider.js';
 import {vendorAssets} from './assets.js';
 import {teachingClient,teachingStyles} from './teaching.js';
@@ -17,8 +18,9 @@ const json = (data,status=200) => new Response(JSON.stringify(data),{status,head
 export default {async fetch(request,env){
  const url=new URL(request.url);
  if(vendorAssets[url.pathname])return new Response(vendorAssets[url.pathname],{headers:{'content-type':'text/javascript; charset=utf-8','cache-control':'public, max-age=86400'}});
+ if(url.pathname.startsWith('/api/lesson/'))return stagedApi(request,env);
  if(url.pathname==='/api/lesson')return teachingApi(request,env);
- if(url.pathname==='/api/status')return json({configured:!!(env.LLM_API_KEY&&env.LLM_MODEL),model:env.LLM_MODEL||null});
+ if(url.pathname==='/api/status')return json({configured:!!(env.LLM_API_KEY&&env.LLM_MODEL),model:env.LLM_MODEL||null,version:"studio-2.0"});
  if(url.pathname==='/api/chat'){
   if(request.method!=='POST')return json({error:'仅接受POST请求'},405);
   if(request.headers.get('origin')!==url.origin)return json({error:'来源不匹配'},403);
@@ -35,9 +37,9 @@ export default {async fetch(request,env){
   }catch{return json({error:'模型请求未完成，请稍后重试。'},502)}
  }
  if(url.pathname!=='/')return new Response('Not found',{status:404});
- return new Response(page.replace('</head>',teachingStyles+'</head>').replace('</body>','<script src="/vendor/pptx.js"></script><script src="/vendor/docx.js"></script><script>'+teachingClient+'</script></body>'),{headers:{'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','referrer-policy':'same-origin','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://chatgpt.com"}});
+ return new Response(page.replace('</head>',()=>teachingStyles+'</head>').replace('</body>',()=>'<script src="/vendor/pptx.js"></script><script src="/vendor/docx.js"></script><script src="/vendor/zip.js"></script><script>'+teachingClient+'</script></body>'),{headers:{'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','referrer-policy':'same-origin','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://chatgpt.com"}});
 }};
-const page = String.raw`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>启知未来 · 学习与备课工作台</title><style>
+const page = String.raw`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>启知未来 · 协同备课工作台</title><style>
 :root{
   --bg:#f8fafc;
   --surface:#ffffff;
