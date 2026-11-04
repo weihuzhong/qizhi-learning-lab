@@ -5,6 +5,7 @@ import {validateLesson} from '../worker/teaching-api.js';
 const scrypt=promisify(rawScrypt),hash=s=>createHash('sha256').update(s).digest('hex');
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 const str=(s,n=300)=>String(s??'').trim().slice(0,n);
+const validateInput=fn=>{try{return fn()}catch(e){fail(e.message,400)}};
 const cleanUser=u=>({id:u.id,name:u.name,username:u.username});
 export function createCloudApi(store){
  const get=key=>store.get(key,{type:'json'});
@@ -34,8 +35,8 @@ export function createCloudApi(store){
  if(path==='/api/cloud/logout'){if(req.method!=='POST')fail('请使用POST',405);await store.delete('sessions/'+hash(s.token));return reply({ok:true},200,{'set-cookie':'qizhi_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'});}
  if(path==='/api/cloud/profile'){
  if(req.method==='GET'){const p=await get(profileKey(u.id));return reply({profile:p||{version:0,lessons:[],preferences:[],schedule:[]}});}
- await throttle(ip,'write',120);const data=b.profile;if(!data||JSON.stringify(data).length>1200000)fail('个人资料超过1.2MB限制，请先导出归档');if(!Array.isArray(data.lessons)||data.lessons.length>30||!Array.isArray(data.preferences)||data.preferences.length>20||!Array.isArray(data.schedule)||data.schedule.length>150)fail('个人资料格式或数量超限');for(const x of data.lessons)validateLesson(x.lesson);for(const x of data.preferences)if(typeof x!=='string'||x.length>300)fail('偏好过长');
- if(data.workspace){const d=data.workspace;if(!d.brief||JSON.stringify(d).length>180000)fail('备课进度格式错误或过大');if(d.lesson)validateLesson(d.lesson);if(d.job){if(!d.job.brief||!Array.isArray(d.job.phases))fail('分步进度格式错误');if(d.job.outline&&d.job.confirmed){validateOutline(d.job.outline,d.job.brief.minutes);d.job.phases.forEach((p,i)=>{if(p)validatePhase(p,d.job.outline,i);});}}}
+ await throttle(ip,'write',120);const data=b.profile;if(!data||JSON.stringify(data).length>1200000)fail('个人资料超过1.2MB限制，请先导出归档');if(!Array.isArray(data.lessons)||data.lessons.length>30||!Array.isArray(data.preferences)||data.preferences.length>20||!Array.isArray(data.schedule)||data.schedule.length>150)fail('个人资料格式或数量超限');for(const x of data.lessons)validateInput(()=>validateLesson(x.lesson));for(const x of data.preferences)if(typeof x!=='string'||x.length>300)fail('偏好过长');
+ if(data.workspace){const d=data.workspace;if(!d.brief||JSON.stringify(d).length>180000)fail('备课进度格式错误或过大');if(d.lesson)validateInput(()=>validateLesson(d.lesson));if(d.job){if(!d.job.brief||!Array.isArray(d.job.phases))fail('分步进度格式错误');if(d.job.outline&&d.job.confirmed){validateInput(()=>validateOutline(d.job.outline,d.job.brief.minutes));d.job.phases.forEach((p,i)=>{if(p)validateInput(()=>validatePhase(p,d.job.outline,i));});}}}
  const p=await update(profileKey(u.id),old=>{if((old?.version||0)!==b.version)fail('云端已有新版本。请先载入云端内容，避免覆盖其他设备的修改。',409);return {version:(old?.version||0)+1,lessons:data.lessons,preferences:data.preferences,schedule:data.schedule,workspace:data.workspace||null,updatedAt:new Date().toISOString()};});return reply({profile:p});
  }
  if(path==='/api/cloud/teams'){const ids=await get('links/'+u.id)||[];const teams=[];for(const id of ids){const w=await get('teams/'+id);if(w?.members.some(m=>m.id===u.id))teams.push({id:w.id,name:w.name,role:w.owner===u.id?'leader':'teacher'});}return reply({teams});}
@@ -53,7 +54,7 @@ export function createCloudApi(store){
  if(!w?.members.some(m=>m.id===u.id))fail('无访问权限',403);
  if(path.endsWith('publish')){
  const items=b.items;if(!Array.isArray(items)||!items.length||items.length>20||w.lessons.length+items.length>40)fail('一次可提交1至20份，组内最多40份教案，请归档后再上传');
- for(const item of items){validateLesson(item.lesson);if(JSON.stringify(item).length>70000)fail('单份备课包过大');const brief=Object.fromEntries(['topic','grade','subject','minutes','prior','resources','learners','context','requirements'].map(k=>[k,k==='minutes'?Number(item.brief?.[k])||40:str(item.brief?.[k],1800)]));w.lessons.unshift({id:randomBytes(12).toString('hex'),authorId:u.id,author:u.name,lesson:item.lesson,brief,createdAt:new Date().toISOString(),source:str(item.source,120)});}
+ for(const item of items){validateInput(()=>validateLesson(item.lesson));if(JSON.stringify(item).length>70000)fail('单份备课包过大');const brief=Object.fromEntries(['topic','grade','subject','minutes','prior','resources','learners','context','requirements'].map(k=>[k,k==='minutes'?Number(item.brief?.[k])||40:str(item.brief?.[k],1800)]));w.lessons.unshift({id:randomBytes(12).toString('hex'),authorId:u.id,author:u.name,lesson:item.lesson,brief,createdAt:new Date().toISOString(),source:str(item.source,120)});}
  }else if(path.endsWith('remove')){const item=w.lessons.find(x=>x.id===b.lessonId);if(!item)fail('教案不存在',404);if(item.authorId!==u.id&&w.owner!==u.id)fail('仅作者或组长可移除教案',403);w.lessons=w.lessons.filter(x=>x.id!==b.lessonId);}
  else {const text=str(b.text,1500);if(!text)fail('讨论内容不能为空');if(b.lessonId&&!w.lessons.some(x=>x.id===b.lessonId))fail('关联教案不存在');w.messages.push({id:randomBytes(12).toString('hex'),author:u.name,authorId:u.id,text,lessonId:str(b.lessonId,24),createdAt:new Date().toISOString()});w.messages=w.messages.slice(-150);}
  w.updatedAt=new Date().toISOString();if(JSON.stringify(w).length>2800000)fail('工作组容量已满，请归档旧教案');return w;});return reply({team:publicTeam(w,u)});
