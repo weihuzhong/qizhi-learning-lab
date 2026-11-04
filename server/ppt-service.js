@@ -1,4 +1,4 @@
-import {randomBytes,createHash,verify} from 'node:crypto';
+import {randomBytes,createHash,verify,createPublicKey} from 'node:crypto';
 import {validateLesson} from '../worker/teaching-api.js';
 import {modelOptions,modelError} from '../worker/model-provider.js';
 import {pptWorkerPublicKey,pptRunnerURL} from './ppt-config.js';
@@ -9,6 +9,23 @@ export function verifyPptWorker(header,publicKey=pptWorkerPublicKey){
  try{const token=(header||'').replace(/^Bearer /,''),[h,p,s]=token.split('.');if(!h||!p||!s)return false;const head=JSON.parse(Buffer.from(h,'base64url')),data=JSON.parse(Buffer.from(p,'base64url'));const now=Math.floor(Date.now()/1000);
  return head.alg==='RS256'&&data.aud==='qizhi-pptmaster-worker-v1'&&data.sub==='pptmaster-executor'&&Number.isInteger(data.exp)&&data.exp>now&&data.exp<now+125&&data.iat<=now+10&&data.iat>now-125&&verify('RSA-SHA256',Buffer.from(h+'.'+p),publicKey,Buffer.from(s,'base64url'));
  }catch{return false;}
+}
+const workerKeyCache=new Map();
+// The signing private key is born inside the executor and never leaves it.
+// Read only its public key from the fixed, TLS-authenticated executor origin.
+export async function resolvePptWorkerKey(runnerURL,header,fetcher=fetch){
+ const endpoint=new URL(runnerURL);if(endpoint.protocol!=='https:')reject('后台必须使用HTTPS',503);
+ let kid;try{kid=JSON.parse(Buffer.from(String(header||'').replace(/^Bearer /,'').split('.')[0],'base64url')).kid;}catch{reject('执行服务认证失败',403)}
+ if(!/^[a-f0-9]{64}$/.test(kid||''))reject('执行服务认证失败',403);
+ const cached=workerKeyCache.get(endpoint.origin),now=Date.now();
+ if(cached&&cached.keyId===kid&&cached.expires>now)return cached.publicKey;
+ if(cached&&now-cached.fetched<5000)return cached.publicKey;
+ const response=await fetcher(endpoint.origin+'/health',{redirect:'error',signal:AbortSignal.timeout(4000)});
+ if(!response.ok)reject('后台身份检查暂不可用',503);const identity=await response.json();
+ if(identity.engine!=='ppt-master'||identity.integrity!==true||identity.sourceCommit!=='3c956467cd053fec36816cb7d2ca973729a5d4d1'||typeof identity.publicKey!=='string')reject('后台身份不匹配',503);
+ let key;try{key=createPublicKey(identity.publicKey);}catch{reject('后台公钥无效',503)}
+ if(key.asymmetricKeyType!=='rsa'||key.asymmetricKeyDetails.modulusLength<2048||digest(identity.publicKey)!==identity.keyId)reject('后台公钥无效',503);
+ workerKeyCache.set(endpoint.origin,{publicKey:identity.publicKey,keyId:identity.keyId,fetched:now,expires:now+300000});return identity.publicKey;
 }
 export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=pptWorkerPublicKey}={}){
  const get=key=>store.get(key,{type:'json'});
@@ -22,7 +39,7 @@ export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=ppt
   try{
    const url=new URL(req.url),path=url.pathname,internal=path.startsWith('/api/ppt/worker/');
    if(!['GET','POST'].includes(req.method))reject('仅支持GET或POST',405);
-   if(internal){if(!verifyPptWorker(req.headers.get('authorization'),workerKey))reject('执行服务认证失败',403);}
+   if(internal){const header=req.headers.get('authorization'),key=runnerURL?await resolvePptWorkerKey(runnerURL,header):workerKey;if(!verifyPptWorker(header,key))reject('执行服务认证失败',403);}
    else if(req.method==='POST'&&req.headers.get('origin')!==url.origin)reject('来源不匹配',403);
    const b=req.method==='POST'?await req.json():{};
    if(path==='/api/ppt/config')return json({engine:'ppt-master',automaticExecution:!!runnerURL,connected:!!runnerURL,maxPages:20,mode:runnerURL?'server-execution':'deployment-pending'});

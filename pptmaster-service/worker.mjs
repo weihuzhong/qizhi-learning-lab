@@ -3,15 +3,17 @@ import {readFile,writeFile,readdir,mkdir,realpath,stat,lstat,rm,cp} from 'node:f
 import path from 'node:path';
 import os from 'node:os';
 import {spawn} from 'node:child_process';
-import {sign,createHash} from 'node:crypto';
+import {sign,createHash,generateKeyPairSync,createPublicKey} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const privateKey=process.env.PPTMASTER_SIGNING_KEY||(process.env.PPTMASTER_SIGNING_KEY_FILE?await readFile(process.env.PPTMASTER_SIGNING_KEY_FILE,'utf8'):'');
-if(!privateKey)throw Error('PPTMaster worker signing key is required');
-function token(){const now=Math.floor(Date.now()/1000),h=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url'),p=Buffer.from(JSON.stringify({aud:'qizhi-pptmaster-worker-v1',sub:'pptmaster-executor',iat:now,exp:now+90})).toString('base64url');return h+'.'+p+'.'+sign('RSA-SHA256',Buffer.from(h+'.'+p),privateKey).toString('base64url');}
+// Instance-only signing key: never imported from the user's computer or exported.
+const {privateKey:servicePrivateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
+const servicePublicKey=createPublicKey(servicePrivateKey).export({type:'spki',format:'pem'});
+const serviceKeyId=createHash('sha256').update(servicePublicKey).digest('hex');
+function token(){const now=Math.floor(Date.now()/1000),h=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT',kid:serviceKeyId})).toString('base64url'),p=Buffer.from(JSON.stringify({aud:'qizhi-pptmaster-worker-v1',sub:'pptmaster-executor',iat:now,exp:now+90})).toString('base64url');return h+'.'+p+'.'+sign('RSA-SHA256',Buffer.from(h+'.'+p),servicePrivateKey).toString('base64url');}
 async function api(route,body){for(let attempt=0;attempt<3;attempt++){try{const r=await fetch(BASE+'/api/ppt/worker/'+route,{method:'POST',headers:{authorization:'Bearer '+token(),'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(55000)});const d=await r.json();if(!r.ok){const e=Object.assign(Error(d.error||'Backend request failed'),{status:r.status});if(r.status<500||attempt===2)throw e;continue;}return d;}catch(e){if(e.status&&e.status<500||attempt===2)throw e;}}}
 function command(exe,args,{cwd,timeout=120000}={}){return new Promise((resolve,reject)=>{
  const child=spawn(exe,args,{cwd,env:{PATH:process.env.PATH,LANG:'C.UTF-8',...(process.env.FONTCONFIG_FILE?{FONTCONFIG_FILE:process.env.FONTCONFIG_FILE}:{}),PYTHONIOENCODING:'utf-8',PYTHONUNBUFFERED:'1'},stdio:['ignore','pipe','pipe']});let stdout='',stderr='';const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('工具执行超时'))},timeout);child.stdout.on('data',d=>stdout=(stdout+d).slice(-90000));child.stderr.on('data',d=>stderr=(stderr+d).slice(-30000));child.on('error',e=>{clearTimeout(timer);reject(e)});child.on('close',code=>{clearTimeout(timer);resolve({code,stdout,stderr})});
@@ -81,5 +83,5 @@ async function drain(){if(busy){drainAgain=true;return;}busy=true;try{do{drainAg
 if(process.argv.includes('--once')){await drain();}
 else{
  const bootGuard=await command('python3',[path.join(SKILL,'scripts/attribution_guard.py')],{cwd:HERE});if(bootGuard.code!==0)throw Error('PPTMaster startup integrity check failed');let lastWake=0,wakeTimer=null;
- const server=http.createServer(async(req,res)=>{if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,integrity:true,busy}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(busy){drainAgain=true;return;}const wait=Math.max(0,10000-(Date.now()-lastWake));if(wakeTimer)return;wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
+ const server=http.createServer(async(req,res)=>{if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,integrity:true,busy,publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(busy){drainAgain=true;return;}const wait=Math.max(0,10000-(Date.now()-lastWake));if(wakeTimer)return;wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
 }
