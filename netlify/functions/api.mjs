@@ -3,7 +3,7 @@ import {createCloudApi} from '../../server/cloud.js';
 import worker from '../../worker/index.js';
 export default async function(request){
  const url=new URL(request.url);
- if(!['/api/status','/api/chat','/api/lesson'].includes(url.pathname)&&!url.pathname.startsWith('/api/lesson/')&&!url.pathname.startsWith('/api/cloud/'))return new Response('Not found',{status:404});
+ if(!['/api/status','/api/chat','/api/lesson'].includes(url.pathname)&&!url.pathname.startsWith('/api/lesson/')&&!url.pathname.startsWith('/api/cloud/')&&!url.pathname.startsWith('/api/deck/'))return new Response('Not found',{status:404});
  if(!['GET','POST'].includes(request.method))return new Response('Method not allowed',{status:405});
  if(request.method==='POST'){
   if(request.headers.get('origin')!==url.origin)return Response.json({error:'来源不匹配'},{status:403});

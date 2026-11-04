@@ -1,3 +1,4 @@
+import {validateDeckPlan,validateScene} from '../worker/ai-deck.js';
 import {validateDocumentReview} from '../worker/document-review.js';
 import {randomBytes,scrypt as rawScrypt,timingSafeEqual,createHash} from 'node:crypto';
 import {promisify} from 'node:util';
@@ -37,7 +38,7 @@ export function createCloudApi(store){
  if(path==='/api/cloud/profile'){
  if(req.method==='GET'){const p=await get(profileKey(u.id));return reply({profile:p||{version:0,lessons:[],preferences:[],schedule:[]}});}
  await throttle(ip,'write',120);const data=b.profile;if(!data||JSON.stringify(data).length>1200000)fail('个人资料超过1.2MB限制，请先导出归档');if(!Array.isArray(data.lessons)||data.lessons.length>30||!Array.isArray(data.preferences)||data.preferences.length>20||!Array.isArray(data.schedule)||data.schedule.length>150)fail('个人资料格式或数量超限');for(const x of data.lessons)validateInput(()=>validateLesson(x.lesson));for(const x of data.preferences)if(typeof x!=='string'||x.length>300)fail('偏好过长');
- if(data.workspace){const d=data.workspace;if(!d.brief||JSON.stringify(d).length>180000)fail('备课进度格式错误或过大');if(d.lesson)validateInput(()=>validateLesson(d.lesson));if(d.job){if(!d.job.brief||!Array.isArray(d.job.phases))fail('分步进度格式错误');if(d.job.outline&&d.job.confirmed){validateInput(()=>validateOutline(d.job.outline,d.job.brief.minutes));d.job.phases.forEach((p,i)=>{if(p)validateInput(()=>validatePhase(p,d.job.outline,i));});}}}
+ if(data.workspace){const d=data.workspace;if(!d.brief||JSON.stringify(d).length>180000)fail('备课进度格式错误或过大');if(d.aiDeck){if(!Array.isArray(d.aiDeck.pages)||d.aiDeck.pages.length>18)fail('AI课件结构无效');if(d.aiDeck.plan)validateInput(()=>validateDeckPlan(d.aiDeck.plan));d.aiDeck.pages.forEach(p=>{if(p)validateInput(()=>validateScene(p));});}if(d.lesson)validateInput(()=>validateLesson(d.lesson));if(d.job){if(!d.job.brief||!Array.isArray(d.job.phases))fail('分步进度格式错误');if(d.job.outline&&d.job.confirmed){validateInput(()=>validateOutline(d.job.outline,d.job.brief.minutes));d.job.phases.forEach((p,i)=>{if(p)validateInput(()=>validatePhase(p,d.job.outline,i));});}}}
  const p=await update(profileKey(u.id),old=>{if((old?.version||0)!==b.version)fail('云端已有新版本。请先载入云端内容，避免覆盖其他设备的修改。',409);return {version:(old?.version||0)+1,lessons:data.lessons,preferences:data.preferences,schedule:data.schedule,workspace:data.workspace||null,updatedAt:new Date().toISOString()};});return reply({profile:p});
  }
  if(path==='/api/cloud/teams'){const ids=await get('links/'+u.id)||[];const teams=[];for(const id of ids){const w=await get('teams/'+id);if(w?.members.some(m=>m.id===u.id))teams.push({id:w.id,name:w.name,role:w.owner===u.id?'leader':'teacher'});}return reply({teams});}

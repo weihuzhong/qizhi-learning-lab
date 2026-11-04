@@ -1,3 +1,4 @@
+import {aiDeckApi} from './ai-deck.js';
 import {stagedApi} from './staged-api.js';
 import {modelOptions,modelError} from './model-provider.js';
 import {vendorAssets} from './assets.js';
@@ -18,9 +19,10 @@ const json = (data,status=200) => new Response(JSON.stringify(data),{status,head
 export default {async fetch(request,env){
  const url=new URL(request.url);
  if(vendorAssets[url.pathname])return new Response(vendorAssets[url.pathname],{headers:{'content-type':'text/javascript; charset=utf-8','cache-control':'public, max-age=86400'}});
+ if(url.pathname.startsWith('/api/deck/'))return aiDeckApi(request,env);
  if(url.pathname.startsWith('/api/lesson/'))return stagedApi(request,env);
  if(url.pathname==='/api/lesson')return teachingApi(request,env);
- if(url.pathname==='/api/status')return json({configured:!!(env.LLM_API_KEY&&env.LLM_MODEL),model:env.LLM_MODEL||null,version:"studio-2.1"});
+ if(url.pathname==='/api/status')return json({configured:!!(env.LLM_API_KEY&&env.LLM_MODEL),model:env.LLM_MODEL||null,version:"studio-3.0"});
  if(url.pathname==='/api/chat'){
   if(request.method!=='POST')return json({error:'仅接受POST请求'},405);
   if(request.headers.get('origin')!==url.origin)return json({error:'来源不匹配'},403);
