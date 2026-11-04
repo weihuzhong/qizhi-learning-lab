@@ -76,10 +76,10 @@ async function executeJob(job){
  }catch(e){await api('fail',{...auth,error:e.message}).catch(()=>{});throw e;}
  finally{if(process.env.PPTMASTER_KEEP_TEST_OUTPUT){await cp(root,process.env.PPTMASTER_KEEP_TEST_OUTPUT,{recursive:true,force:true,preserveTimestamps:true});}await rm(root,{recursive:true,force:true});}
 }
-let busy=false;
-async function drain(){if(busy)return;busy=true;try{for(let i=0;i<10;i++){const {job}=await api('claim',{});if(!job)break;console.log('PPTMaster job started:',job.id);try{await executeJob(job);console.log('PPTMaster job complete:',job.id);}catch(e){console.error('PPTMaster job failed:',job.id,String(e.message).slice(0,400));}}}finally{busy=false;}}
+let busy=false,drainAgain=false;
+async function drain(){if(busy){drainAgain=true;return;}busy=true;try{do{drainAgain=false;for(;;){const {job}=await api('claim',{});if(!job)break;console.log('PPTMaster job started:',job.id);try{await executeJob(job);console.log('PPTMaster job complete:',job.id);}catch(e){console.error('PPTMaster job failed:',job.id,String(e.message).slice(0,400));}}}while(drainAgain);}finally{busy=false;}}
 if(process.argv.includes('--once')){await drain();}
 else{
- const bootGuard=await command('python3',[path.join(SKILL,'scripts/attribution_guard.py')],{cwd:HERE});if(bootGuard.code!==0)throw Error('PPTMaster startup integrity check failed');let lastWake=0;
- const server=http.createServer(async(req,res)=>{if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,integrity:true,busy}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(Date.now()-lastWake<10000)return;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
+ const bootGuard=await command('python3',[path.join(SKILL,'scripts/attribution_guard.py')],{cwd:HERE});if(bootGuard.code!==0)throw Error('PPTMaster startup integrity check failed');let lastWake=0,wakeTimer=null;
+ const server=http.createServer(async(req,res)=>{if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,integrity:true,busy}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(busy){drainAgain=true;return;}const wait=Math.max(0,10000-(Date.now()-lastWake));if(wakeTimer)return;wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
 }
