@@ -1,3 +1,5 @@
+> 当前版本 3.1.0：PPT制作改为 **DeepSeek Harness + PPTMaster 手动交接**。网站生成含教案、页数与风格的任务；用户在已安装PPTMaster的Harness中实际执行，完成后导入PPTX核对页数并保留原件。**网站全自动调用尚未接通**，不再使用此前的逐页JSON生成器。详见 [当前接入状态](docs/pptmaster-integration.md)。下文3.0相关记录为历史说明。
+
 # 启知未来 · 协同备课工作台
 
 面向青年教师与大学生支教团队。生产网址：https://qizhi-wuhaozhe.netlify.app/ 。沿用原 Netlify 项目，不新建站点。
