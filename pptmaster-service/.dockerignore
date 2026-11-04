@@ -1,0 +1,5 @@
+**
+!Dockerfile
+!worker.mjs
+!verify-render.py
+!railway.json

@@ -1,4 +1,4 @@
-> 当前版本 3.1.0：PPT制作改为 **DeepSeek Harness + PPTMaster 手动交接**。网站生成含教案、页数与风格的任务；用户在已安装PPTMaster的Harness中实际执行，完成后导入PPTX核对页数并保留原件。**网站全自动调用尚未接通**，不再使用此前的逐页JSON生成器。详见 [当前接入状态](docs/pptmaster-integration.md)。下文3.0相关记录为历史说明。
+> PPTMaster自动制作后台已实现，并已真实生成8页可编辑课件；**公开网页自动入口尚未上线**。Railway实际部署被工作区限制拒绝，未升级付费。已准备Render免费Docker部署配置。当前网页仍保留此前的手动交接入口。详见[实现、验证及部署状态](docs/pptmaster-online-rollout.md)。
 
 # 启知未来 · 协同备课工作台
 

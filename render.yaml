@@ -1,0 +1,21 @@
+# Free web service only. No database, disk, or paid add-on.
+services:
+  - type: web
+    name: qizhi-pptmaster
+    runtime: docker
+    plan: free
+    region: oregon
+    repo: https://github.com/weihuzhong/qizhi-learning-lab
+    branch: main
+    rootDir: pptmaster-service
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: QIZHI_ORIGIN
+        value: https://qizhi-wuhaozhe.netlify.app
