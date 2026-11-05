@@ -7,6 +7,8 @@ RUN git clone --filter=blob:none https://github.com/pn1024/dsh-ppt-master.git /o
 RUN useradd --create-home --uid 10001 executor
 WORKDIR /app
 COPY worker.mjs verify-render.py ./
+COPY fonts.conf /etc/fonts/conf.d/99-qizhi-cjk.conf
+RUN fc-cache -f && fc-match -f "%{family}" "Microsoft YaHei" | python3 -c "import sys; assert 'Noto Sans CJK SC' in sys.stdin.read(), 'Chinese preview font alias missing'"
 USER executor
 ENV NODE_ENV=production
 EXPOSE 3000
