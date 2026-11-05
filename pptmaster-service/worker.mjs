@@ -53,7 +53,7 @@ async function executeJob(job){
    if(!calls.some(c=>c.script==='svg_quality_checker.py'&&c.code===0&&c.args.includes('--quick-generate')&&c.args.includes('final'))||!calls.some(c=>c.script==='svg_to_pptx.py'&&c.code===0&&c.args.includes('--quick-generate')))throw Error('必须先真实运行PPTMaster最终检查和导出');
    await progress('rendering','正在核对实际页数并渲染整稿预览');
    const check=await command('python3',[path.join(HERE,'verify-render.py'),project,pptx,String(job.count),SKILL],{cwd:root});if(check.code!==0)throw Error(check.stderr||check.stdout||'成稿核验未通过');
-   const result=JSON.parse(check.stdout),audit={engine:'ppt-master',sourceCommit:COMMIT,model:'DeepSeek',actualCount:result.count,commands:calls,summary:String(args.summary||'').slice(0,1000),elapsedSeconds:Math.round((Date.now()-start)/1000)};
+   const result=JSON.parse(check.stdout);await progress('checking','正在独立核对教学步骤、课堂时间与实验条件');const contentReview=await api('review',{...auth,slides:result.pages.map((p,i)=>({number:i+1,text:p.text}))});if(!contentReview.passed){const error=Error('独立教学内容复核未通过：'+JSON.stringify(contentReview.issues)+'。请修订对应SVG并重新执行PPTMaster最终检查与导出，再提交finish。');if(contentReview.attempts>=3)error.fatal=true;throw error;}const audit={contentReview,engine:'ppt-master',sourceCommit:COMMIT,model:'DeepSeek',actualCount:result.count,commands:calls,summary:String(args.summary||'').slice(0,1000),elapsedSeconds:Math.round((Date.now()-start)/1000)};
    for(const [name,p] of [['deck.pptx',pptx],...result.pages.map((x,i)=>['page-'+String(i+1).padStart(2,'0')+'.png',x.preview])]){const bytes=await readFile(p);if(bytes.length>3500000)throw Error('导出文件超过3.5MB交付限制，请减少过大的图片后重新导出');const receipt=await api('upload',{...auth,name,data:bytes.toString('base64')});if(receipt.sha256!==createHash('sha256').update(bytes).digest('hex'))throw Error('交付校验失败');}
    await api('upload',{...auth,name:'audit.json',data:Buffer.from(JSON.stringify(audit,null,2)).toString('base64')});
    await api('complete',{...auth,result:{engine:'ppt-master',sourceCommit:COMMIT,actualCount:result.count,pages:result.pages.map((p,i)=>({number:i+1,title:p.title,preview:'page-'+String(i+1).padStart(2,'0')+'.png'})),summary:audit.summary,elapsedSeconds:audit.elapsedSeconds}});finished=true;return {delivered:true,pages:result.count};
@@ -71,7 +71,7 @@ async function executeJob(job){
    const {message,finishReason}=await api('model',{...auth,messages,tools});
    if(finishReason==='length'){messages.push({role:'user',content:'上一轮输出被截断，没有执行其中任何工具。请只返回一个完整工具调用，每轮最多写一页SVG。把正文精简，继续完成全部页面。'});continue;}
    console.log('PPTMaster step',turn+1, (message.tool_calls||[]).map(c=>c.function?.name).join(',')||'continue');messages.push(message);
-   if(message.tool_calls?.length){for(const call of message.tool_calls){let out;try{out=await use(call.function.name,JSON.parse(call.function.arguments));}catch(e){out={error:e.message};}messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(out)});if(finished)break;}}
+   if(message.tool_calls?.length){for(const call of message.tool_calls){let out;try{out=await use(call.function.name,JSON.parse(call.function.arguments));}catch(e){if(e.fatal)throw e;out={error:e.message};}messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(out)});if(finished)break;}}
    else messages.push({role:'user',content:'请继续实际执行PPTMaster的剩余步骤。只有完整PPTX通过最终检查后才能调用finish；不要停在说明、目录或第一页。'});
   }
   if(!finished)throw Error('本次制作达到工作步骤上限，尚未交付完整课件');

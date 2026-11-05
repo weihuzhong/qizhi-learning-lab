@@ -80,7 +80,7 @@ def verify_and_render(project, deck, expected, skill_dir=None):
             raise ValueError(f'第{index}页缺少教师指导备注')
         preview = output / f'page-{index:02}.png'
         render_svg(svg, preview, project, skill_dir)
-        result.append({'title': next((x.strip().split('\n')[0][:80] for x in text if x.strip()), f'第{index}页'), 'preview': str(preview)})
+        result.append({'text': '\n'.join(text)[:8000], 'title': next((x.strip().split('\n')[0][:80] for x in text if x.strip()), f'第{index}页'), 'preview': str(preview)})
     return {'count': len(presentation.slides), 'pages': result}
 
 
