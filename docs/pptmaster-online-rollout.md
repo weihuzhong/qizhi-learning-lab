@@ -1,58 +1,64 @@
-# PPTMaster 网页自动制作：实现与上线状态
+# PPTMaster 网页自动制作：上线与运维说明
 
-## 已实现
+## 当前线上配置
 
-- 网页端提交整稿任务、后台进度、停止任务、逐页预览、直接下载完整可编辑PPTX。
-- 访客不需要安装插件、提供API密钥或登录维护者账号。生成任务通过独立访客会话隔离，文件读取有访问检查。
-- Netlify保存队列、进度与交付文件；DeepSeek密钥继续留在Netlify。后台执行器以短时签名认证请求模型代理，浏览器与Python工具均拿不到模型密钥。
-- 后台工具执行器让DeepSeek读取并运行真实 `pn1024/dsh-ppt-master` 包，版本6.1.0，固定上游提交 `3c956467cd053fec36816cb7d2ca973729a5d4d1`。不依赖访客电脑中的DeepSeek Harness桌面界面。
-- 用户点击“直接生成整份PPT”即明确选择自动决定方案、跳过逐步策略确认，按PPTMaster Quick Generate路由运行。模型逐页编写SVG，实际调用原始Python完整性检查、质量检查、备注与原生PPTX导出工具。
-- 交付必须满足实际PPTX页数、SVG页数与请求一致；每页有备注。未通过检查不会显示成功。任务的原始工具调用记录一并交付。
-- 预览只读取任务内资源，并使用PPTMaster自己的图标解析辅助函数。不调用会修改作者SVG的`finalize_svg.py`，不改变已通过检查的源文件。已修复CairoSVG默认安全加载器不读取相对图片、以及`data-icon`无法直接渲染的问题。
+- 公开网站：https://qizhi-wuhaozhe.netlify.app/
+- 网站版本：studio-3.2.0，网页直接生成入口已启用。
+- 执行后台：https://qizhi-pptmaster.onrender.com
+- Render服务：`srv-dblkigkipgvc73ebi4dg`，工作区`tea-dblke5ijnfac7389n220`。
+- 计算方案：Free，单实例，无额外数据库、磁盘或付费附加服务。
+- 当前执行版本`5be18e666dc3dce738b1e100062fe3bf07f1b8a6`包含字体修复与独立教学复核，健康检查返回`previewFont: Noto Sans CJK SC`。
+- Netlify中的模型密钥和现有云端资料配置保持原位；后台只通过受签名保护的模型代理调用DeepSeek。
 
-## 真实验证
+## 访客如何使用
 
-两次通过现有Netlify模型代理调用DeepSeek、真实运行PPTMaster，分别导出8页可编辑PPTX。第二次耗时约330秒，8页均有教师备注，PPTMaster整稿报告为0错误、0警告。全页预览已检查，照片与项目图标加载已修复验证。
+1. 从“模板中心”载入一份完整教案，或按自己的课题备课。
+2. 进入“我的教案与课件”→“制作 PPT”。
+3. 设置整稿页数（4至20页）和视觉要求，点击“直接生成整份 PPT”。
+4. 查看后台进度；可以刷新，回到同一浏览器的“制作 PPT”继续查看。
+5. 成稿后逐页预览，下载完整可编辑PPTX和制作检查记录。
 
-代码检查：21项JavaScript测试、3项Python预览测试通过；构建通过。测试覆盖签名、访客隔离、取消任务、缺文件与页数不符拒绝交付、模型密钥保留在服务器、相对图片可见与外部文件读取拒绝。
+评委和其他访客无需安装插件、使用维护者账号或填写模型密钥。访客会话彼此隔离：只有创建任务的浏览器能读取该任务与文件。文件保存7天，建议及时下载。清除浏览器数据或更换浏览器后，无法凭公开任务编号读取文件。
 
-## 尚未上线的部分
+## 实际制作机制
 
-已按用户授权创建Railway项目`qizhi-pptmaster`与执行服务`pptmaster-executor`，配置1 vCPU、0.5GB内存及空闲休眠，未升级付费套餐。CLI登录已完成，但实际上传被Railway拒绝：`We limited this workspace after detecting unusual activity. Upgrade to a paid plan to lift this restriction automatically.` 初次上传返回HTTP 500，记录部署`cfab9f55-b280-47d1-b2ed-4546cb7471ae`为FAILED，构建日志为空。已停止部署重试；未升级付费，也未尝试绕过工作区限制。因此：
+DeepSeek通过服务端工具循环读取并执行真实`pn1024/dsh-ppt-master`版本6.1.0，固定上游提交`3c956467cd053fec36816cb7d2ca973729a5d4d1`。用户点击直接生成即选择自动设计、跳过逐步策略确认，使用Quick Generate路线。
 
-- `server/ppt-config.js`中的后台URL仍为空。
-- `worker/ppt-online-config.js`的启用开关仍为false。
-- 正式网站尚未切换到所有访客可直接生成的自动入口。
-- 临时测试进程仅用于真实验证，不能作为公开评审的持续后台。
+模型逐页编写SVG，实际执行原始完整性检查、整稿质量检查、备注处理与原生PPTX导出工具。交付前须核验SVG和PPTX页数与请求一致、每页有教师备注、文件上传校验通过。未通过时不会显示制作完成。
 
-## 已授权的上线配置
+交付前还有一次独立的DeepSeek教学内容复核，依据实际PPTX提取文字与源教案检查步骤编号、课堂时间、实验条件及预测/实测表述。发现明确矛盾时将问题送回制作模型，要求重新修改SVG、检查并导出；最多复核3次，仍不通过则明确失败。复核通过记录写入audit.json。AI复核不能代替教师审阅。
 
-Railway项目`8772b7a5-a9e0-4b46-9f28-f26d9ec99023`，执行服务`76dedfbe-4d05-44e1-aa84-514f1a358f0b`：
+执行器私钥在启动时于服务内存生成，不上传本地私钥，也不复制DeepSeek密钥。Netlify只通过固定HTTPS后台地址读取公钥并验证短时签名。Python工具不接收模型密钥。
 
-- 源码目录：`pptmaster-service/`，使用所附Dockerfile。
-- 资源上限：1 vCPU、0.5GB内存，开启空闲休眠。
-- 不创建数据库、存储卷或付费附加服务；保持试用/免费套餐，不升级付费。
-- 执行器在启动时自行生成RSA签名私钥，只保存在服务内存；不上传本地私钥，不复制DeepSeek密钥。Netlify只通过固定HTTPS后台地址读取公钥并核验签名；模型仍通过现有Netlify后端调用。
-- 在服务成功部署、健康检查通过后，写入实际后台地址，启用网页入口，再做公开访客的生成与下载验收。
+预览只读取本任务资源，使用原始PPTMaster图标解析辅助函数，不修改作者SVG和检查指纹。Linux中将微软雅黑等中文字体映射到Noto CJK，解决预览中文字变为方框的问题；构建和启动均校验该映射。PPTX仍保留目标Windows字体及可编辑文字、图形。
 
-免费资源额度有限，耗尽时服务可能暂停，不能宣传无限免费或永久在线。模型调用仍使用作品维护者已有的DeepSeek额度。
+## 验收记录
 
-## 免费替代部署：Render（尚未连接）
+- 独立访客API任务`79fc2500de15dc6e0e3bc421fa9ccd87`已通过Render真实执行，耗时373秒，生成8页PPTX、8页教师备注和8张预览，含嵌入图片。检查记录包含真实`svg_quality_checker.py`、`svg_to_pptx.py`与`pptx_delivery_check.py`成功执行。
+- 上述任务的预览暴露了Linux中文字体替换问题，已修复并部署；不会将旧方框预览作为最终视觉验收结果。
+- 未携带访客会话的真实PPTX下载请求返回403，确认文件没有因公开部署而开放给其他访客。
+- 22项JavaScript测试、3项Python预览测试通过，网页构建通过。
+- 网页访客任务`8518175ee9b6844f48a815a1b5c42184`已从制作按钮真实发起，刷新后任务恢复正常。445秒交付8页PPTX和8页教师备注，下载文件SHA256为`155218bd3a336057bb61da1fb6a45c295d613c2ccfb5c4bc817a8ad9377ca31f`，全部预览可切换，中文显示已修复。逐页检查发现第6页步骤标题与页内流程编号矛盾，因此追加独立教学内容复核，未将该样例作为内容无误的成稿宣传。
 
-仓库根目录已提供`render.yaml`，明确`plan: free`，只创建一个Docker Web Service；不创建数据库、磁盘或付费附加服务。后台使用同一份真实PPTMaster执行器。
+- 独立教学复核的线上任务`1a483d308f5997541e9a40e24c4a5183`已通过：换用“纸角书签”劳动课教案，网页直接生成4页PPTX和4页教师备注，耗时405秒，第2轮独立内容复核返回passed=true、issues=[]。实际浏览器下载文件SHA256为`5badd2400e973f490f35d95c69e0f5071267a7c54169376f05a573049a3832f9`。8页与4页两种页数、科学与劳动两类输入均已完成真实生成及下载验证。
 
-[打开免费部署配置](https://render.com/deploy?repo=https://github.com/weihuzhong/qizhi-learning-lab)
+## 免费方案限制
 
-1. 连接Render账号后，读取已有服务，避免重复创建。
-2. 使用`render.yaml`部署，保持Free计算方案。服务根目录为`pptmaster-service`，Dockerfile与构建上下文相对此目录；环境变量只有公开网站地址、端口与运行模式。
-3. 等待部署成功，检查实际HTTPS地址`/health`：需包含固定PPTMaster上游提交、完整性通过标志及服务自行生成的RSA公钥。
-4. 将已验证的固定HTTPS地址写入`server/ppt-config.js`，启用`worker/ppt-online-config.js`，同步更新前端手动交接文案和状态接口。
-5. 通过新的公开访客会话实际生成整份课件，核验页数、全部预览、教师备注、下载与访客隔离，再宣布上线。
+Render免费Web服务会闲置休眠，唤醒可能需要约1分钟；每工作区每月有750小时，另有带宽、构建与外部请求额度。免费服务可能重启或暂停，不提供生产可用性承诺。模型调用仍消耗维护者已有DeepSeek额度。
 
-限制：Render免费Web服务闲置15分钟后休眠，唤醒约1分钟；每工作区每月750小时，另有带宽和构建额度。Render说明免费方案适合测试及个人项目，不提供生产稳定性承诺。模型调用仍消耗维护者的DeepSeek额度。没有绑卡时超过带宽或构建额度会暂停服务或新构建；如账号已有付款方式，应在部署前核查支出上限。
+后台按队列逐份制作，8页实测约6至8分钟，实际时间取决于模型、页数、内容和资源条件。提交端有限流和排队上限。任务中断时可停止后重新提交，原教案保留。
 
-官方资料：
+前端与Netlify函数随GitHub main自动部署。Render执行器为手动部署，避免每次前端改动打断正在制作的课件；修改`pptmaster-service/`后需单独触发部署，并等待live及健康检查通过。不要在有运行中任务时主动更新后台。
+
+## 部署历史
+
+Railway曾创建空执行服务，但源码上传被该工作区的限制拒绝，未升级付费，也未绕过限制。实际公开执行器已迁移至Render，上述Railway空服务不承担任何任务。
+
+免费部署蓝图位于仓库根目录`render.yaml`，明确`plan: free`。不要省略plan字段或为了部署方便改为付费档。
+
+官方参考：
 - https://render.com/docs/free
+- https://render.com/docs/deploys
+- https://render.com/docs/health-checks
 - https://render.com/docs/blueprint-spec
-- https://render.com/docs/monorepo-support
-- https://docs.railway.com/platform/trust-and-safety
+

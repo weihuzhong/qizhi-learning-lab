@@ -1,4 +1,4 @@
-> PPTMaster自动制作后台已实现，并已真实生成8页可编辑课件；**公开网页自动入口尚未上线**。Railway实际部署被工作区限制拒绝，未升级付费。已准备Render免费Docker部署配置。当前网页仍保留此前的手动交接入口。详见[实现、验证及部署状态](docs/pptmaster-online-rollout.md)。
+> 当前版本3.2.0：已启用网页直接生成完整PPT。DeepSeek调用真实PPTMaster，在Render免费执行后台完成制作；访客无需安装插件或提供密钥，可查看进度、逐页预览并下载可编辑PPTX。公开验收记录与免费额度限制见[上线说明](docs/pptmaster-online-rollout.md)。
 
 # 启知未来 · 协同备课工作台
 
