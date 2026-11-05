@@ -9,11 +9,12 @@ const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});}
 const str=(s,n=300)=>String(s??'').trim().slice(0,n);
 const validateInput=fn=>{try{return fn()}catch(e){fail(e.message,400)}};
 const cleanUser=u=>({id:u.id,name:u.name,username:u.username});
+export async function readCloudSession(store,req){const token=req.headers.get('cookie')?.match(/(?:^|;\s*)qizhi_session=([a-f0-9]{64})(?:;|$)/)?.[1];if(!token)return null;const s=await store.get('sessions/'+hash(token),{type:'json'});if(!s||s.expires<Date.now())return null;const user=await store.get('users/'+s.userId,{type:'json'});return user?{user,token}:null;}
 export function createCloudApi(store){
  const get=key=>store.get(key,{type:'json'});
  async function update(key,fn){for(let n=0;n<5;n++){const old=await store.getWithMetadata(key,{type:'json'});const data=await fn(old?.data??null);const r=await store.setJSON(key,data,old?{onlyIfMatch:old.etag}:{onlyIfNew:true});if(r.modified)return data;}fail('多人同时操作，请刷新后重试',409);}
  async function throttle(ip,kind,limit){const key='rate/'+kind+'/'+hash(ip).slice(0,32)+'/'+Math.floor(Date.now()/600000);await update(key,old=>{if((old?.count||0)>=limit)fail('请求频繁，请10分钟后再试',429);return {count:(old?.count||0)+1};});}
- async function session(req){const token=req.headers.get('cookie')?.match(/(?:^|;\s*)qizhi_session=([a-f0-9]{64})(?:;|$)/)?.[1];if(!token)return null;const s=await get('sessions/'+hash(token));if(!s||s.expires<Date.now())return null;const u=await get('users/'+s.userId);return u?{user:u,token}:null;}
+ const session=req=>readCloudSession(store,req);
  const profileKey=id=>'profiles/'+id;
  async function links(id,workspace){return update('links/'+id,old=>[...new Set([...(old||[]),workspace])].slice(-15));}
  async function workspace(id,u){if(!/^[a-f0-9]{24}$/.test(id||''))fail('工作组编号无效');const w=await get('teams/'+id);if(!w||!w.members.some(m=>m.id===u.id))fail('没有此工作组的访问权限',403);return w;}

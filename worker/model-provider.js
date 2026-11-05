@@ -8,9 +8,9 @@ export function modelOptions(env,limit){
 export async function modelError(response){
  let error={};try{error=(await response.json()).error||{}}catch{}
  const code=response.status===402?'insufficient_balance':String(error.code||error.type||'upstream_error');
- let message='模型服务返回异常（'+response.status+'），请联系作品维护者检查服务配置。';
- if(response.status===402||['insufficient_quota','credit_balance_exhausted'].includes(code))message='模型API余额或额度不足，请联系作品维护者检查余额与项目限额。评审用户无需自行充值。';
- else if(response.status===401)message='模型密钥无效，请联系作品维护者检查后台配置。';
+ let message='模型服务返回异常（'+response.status+'），请检查个人模型配置或稍后重试。';
+ if(response.status===402||['insufficient_quota','credit_balance_exhausted'].includes(code))message='你的DeepSeek API余额或额度不足，请前往自己的开放平台账户检查余额与限额；不会使用维护者额度。';
+ else if(response.status===401)message='你的DeepSeek API密钥无效，请在账号页重新绑定自己的密钥。';
  else if(response.status===429)message='模型请求达到速率或并发限制，请稍后再试。';
  return {error:message,code,upstream_status:response.status};
 }

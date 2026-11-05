@@ -1,4 +1,4 @@
-> 当前版本3.2.0：已启用网页直接生成完整PPT。DeepSeek调用真实PPTMaster，在Render免费执行后台完成制作；访客无需安装插件或提供密钥，可查看进度、逐页预览并下载可编辑PPTX。公开验收记录与免费额度限制见[上线说明](docs/pptmaster-online-rollout.md)。
+> 当前版本3.3.0：AI功能改为个人额度模式。先登录本站，再绑定自己的DeepSeek API密钥；教案、对话、PPT设计和独立复核均使用该账号的API余额，未绑定或失效时不回退维护者密钥。网页直接生成完整PPT仍由真实PPTMaster完成。见[上线说明](docs/pptmaster-online-rollout.md)。
 
 # 启知未来 · 协同备课工作台
 
@@ -21,7 +21,7 @@ Node.js 22+；首次运行 `npm ci`，验证 `npm test`，构建 `npm run build`
 
 ## 运行配置
 
-Netlify服务端变量：`LLM_API_KEY`（Secret，Functions，Production）；默认 `LLM_BASE_URL=https://api.deepseek.com`，`LLM_MODEL=deepseek-flash`。不把密钥提交到仓库、前端或聊天中。改变量后重新部署。
+Netlify服务端变量：`USER_MODEL_VAULT_SECRET`（至少32字符的随机Secret，Functions，Production）用于AES-256-GCM加密个人密钥；`LLM_MODEL=deepseek-flash`指定模型。为兼容既有线上部署，尚未配置专用保险箱Secret时暂用原`LLM_API_KEY`派生加密密钥，但该部署密钥不再传给任何模型请求。不要直接删除或轮换当前保险箱Secret，否则旧绑定无法解密，需要用户重新绑定。切换为专用Secret时先安排重新绑定，再移除旧变量。DeepSeek接口地址固定，访客不可自定义转发地址。不把密钥提交到仓库、前端或聊天中。改变量后重新部署。
 
 云端使用 `@netlify/blobs` 的站点级强一致存储 `qizhi-studio-v2`，Functions中自动获得站点存储凭证；不需要另购服务器。存储、函数及模型均有额度或费用边界，不能保证无限免费。部署预览与生产默认共用站点存储，不用真实用户资料测试预览。
 
@@ -33,6 +33,7 @@ Netlify服务端变量：`LLM_API_KEY`（Secret，Functions，Production）；�
 - `worker/studio-core.js`：课前检查、排课和可解释结构分析，共享确定性逻辑。
 - `worker/template-catalog.js`：原创内容。
 - `worker/studio-client.js`：工作台、流程状态、云端/团队界面。
+- `server/user-model.js`：个人密钥验证、余额查询、按账号加密与撤销；`server/app-api.js`统一拦截所有AI入口。
 - `server/cloud.js`：账号、个人快照、教研组权限；`netlify/functions/api.mjs`入口。真实云端行为需在Netlify验证，本地测试采用内存存储替身。
 - `worker/teaching.js`：保留并扩展原教案编辑与Word/PPTX导出。
 - 旧 `/api/lesson` 保留兼容，前端默认使用分步接口。
@@ -49,10 +50,10 @@ Netlify服务端变量：`LLM_API_KEY`（Secret，Functions，Production）；�
 
 新增模块：`worker/document-review.js`、`worker/review-client.js`、`worker/deck-client.js`。封面与示意图来源见 `worker/media/README.md`。
 
-## 3.0 AI直接制作课件
+## 3.0 历史设计（已由PPTMaster后台替代，旧接口返回410）
 
 默认PPT流程改为AI设计：`/api/deck/plan`由现有DeepSeek设计整份课件的叙事结构与调色板，`/api/deck/slide`逐页生成原生元素的位置、大小、字体、颜色和教学示意。程序负责校验、预览与导出，不套用固定布局。支持4至18页、暂停续做、单页按要求重做、文字编辑和原生可编辑PPTX。旧固定版式降为折叠的离线草稿。
 
-无需新服务账号或额外PPT生成网站，继续消耗现有模型调用额度。不会声称DeepSeek能生成位图；图片仅使用允许的本站素材或教师上传内容，概念关系可由AI设计为可编辑图形。缺少对应素材时不伪造图片来源。AI设计结果仍需教师审阅。
+当前3.3版本需要登录并绑定自己的DeepSeek API密钥，使用个人API余额。不会声称DeepSeek能生成位图；图片仅使用允许的本站素材或教师上传内容，概念关系可由AI设计为可编辑图形。缺少对应素材时不伪造图片来源。AI设计结果仍需教师审阅。
 
 AI课件保存于当前浏览器，主动保存个人云端快照时同步。自选插图仍保存在本机，换设备后需要重新上传。
