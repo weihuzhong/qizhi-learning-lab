@@ -1,2 +1,2 @@
-// Activate only after a persistent executor has passed the real end-to-end test.
-export const onlinePptEnabled=false;
+// Persistent executor is live; publication requires successful full-deck acceptance.
+export const onlinePptEnabled=true;
