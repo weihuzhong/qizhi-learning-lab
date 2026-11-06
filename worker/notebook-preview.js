@@ -165,11 +165,13 @@ export const notebookStyles=String.raw`<style id="qizhi-notebook-preview">
 </style>`;
 
 export const notebookClient=String.raw`
-const notebookExit=document.createElement('a');
-notebookExit.href='/';
-notebookExit.className='notebook-return';
-notebookExit.textContent='查看正式版';
-document.querySelector('.top-actions').prepend(notebookExit);
+if(location.pathname==='/design-preview'){
+ const notebookExit=document.createElement('a');
+ notebookExit.href='/';
+ notebookExit.className='notebook-return';
+ notebookExit.textContent='查看正式版';
+ document.querySelector('.top-actions').prepend(notebookExit);
+}
 
 const notebookPrepPage=prepPage;
 prepPage=function(){
