@@ -39,12 +39,12 @@ const paletteColors={forest:'#286650',ocean:'#2969a8',violet:'#7254b6',amber:'#9
 const appearanceDialog=document.createElement('dialog');
 appearanceDialog.className='appearance-dialog';
 appearanceDialog.setAttribute('aria-labelledby','appearanceTitle');
-appearanceDialog.innerHTML='<div class="appearance-head"><div><span class="s2-label">MAKE IT YOURS</span><h2 id="appearanceTitle">让工作台，更像你的空间。</h2></div><button class="btn appearance-close" aria-label="关闭外观设置">×</button></div><p>选择喜欢的色彩，让每一次备课都舒适一点。</p><fieldset><legend>主题配色</legend><div class="palette-grid">'+Object.entries(appearanceNames).map(([id,name])=>'<button class="palette-choice" data-palette-choice="'+id+'" aria-pressed="false"><span class="palette-preview" style="--sample:'+paletteColors[id]+'"><i></i><span><b></b><b></b><b></b></span></span><span>'+name+'<b class="palette-check" aria-hidden="true">✓</b></span></button>').join('')+'</div></fieldset><fieldset><legend>显示模式</legend><div class="mode-options">'+Object.entries(appearanceModes).map(([id,name])=>'<button data-mode-choice="'+id+'" aria-pressed="false">'+name+'</button>').join('')+'</div></fieldset><div class="appearance-note" role="status">设置自动保存在此浏览器，不影响课件的设计主题。</div>';
+appearanceDialog.innerHTML='<div class="appearance-head"><h2 id="appearanceTitle">外观设置</h2><button class="btn appearance-close" aria-label="关闭外观设置">×</button></div><fieldset><legend>主题配色</legend><div class="palette-grid">'+Object.entries(appearanceNames).map(([id,name])=>'<button class="palette-choice" data-palette-choice="'+id+'" aria-pressed="false"><span class="palette-preview" style="--sample:'+paletteColors[id]+'"><i></i><span><b></b><b></b><b></b></span></span><span>'+name+'<b class="palette-check" aria-hidden="true">✓</b></span></button>').join('')+'</div></fieldset><fieldset><legend>显示模式</legend><div class="mode-options">'+Object.entries(appearanceModes).map(([id,name])=>'<button data-mode-choice="'+id+'" aria-pressed="false">'+name+'</button>').join('')+'</div></fieldset><div class="appearance-note" role="status">设置自动保存在此浏览器，不影响课件的设计主题。</div>';
 document.body.appendChild(appearanceDialog);
 const appearanceTrigger=document.createElement('button');
 appearanceTrigger.className='btn appearance-trigger';
 appearanceTrigger.setAttribute('aria-haspopup','dialog');
-appearanceTrigger.innerHTML=uiIcon('spark')+'<span>外观主题</span>';
+appearanceTrigger.innerHTML=uiIcon('settings')+'<span>外观主题</span>';
 const topActions=document.createElement('div');topActions.className='top-actions';
 document.querySelector('.topbar').appendChild(topActions);
 topActions.append($('status'),appearanceTrigger);
@@ -57,9 +57,31 @@ appearanceDialog.querySelectorAll('[data-palette-choice],[data-mode-choice]').fo
 document.addEventListener('qizhi:appearance',syncAppearanceControls);syncAppearanceControls();
 
 home=function(){
- const lesson=T().lesson;
- const cards=[['prep','edit','创作一份教案','从教学条件与大纲开始，把想法变成课堂。','开始备课'],['templates','slides','发现教学灵感','浏览教学模板，让灵感更快落地。','浏览模板'],['templates','book','借用一个好框架','六类教学模板，给你的下一节课一个起点。','挑选模板']];
- return '<div class="desk-heading"><div><span class="s2-label">YOUR TEACHING SPACE</span><h1>把灵感，带进课堂。</h1><p>备课、课件与协作，在这里从容开始。</p></div><span class="desk-date">'+new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long',timeZone:'Asia/Shanghai'}).format(new Date())+'</span></div><section class="desk-hero"><div class="desk-hero-copy"><span class="desk-overline"><i></i> 为每一节好课，留一点想象</span><h2>少一点准备的忙碌，<br>多一点教学的可能。</h2><p>从一份教案，到一堂生动的课。<br>让启知陪你把每一个好想法慢慢完善。</p><div class="row"><button class="btn primary" id="startStudio">'+uiIcon('edit')+' 开始我的备课 '+uiIcon('arrow')+'</button><button class="btn desk-secondary" id="judgeDemo">免登录体验示例</button></div><small>示例可直接预览和导出 · 实时 AI 生成需绑定个人 DeepSeek API 密钥</small></div><div class="desk-art" aria-hidden="true"><div class="desk-art-note"><span>IDEAS INTO LESSONS</span><strong>一节好课，<br>从一个好奇开始。</strong><div>启知未来 / TEACHING STUDIO</div></div></div></section><div class="desk-section-title"><h2>今天，想从哪里开始？</h2><span>选择一种方式，进入你的教学工作流</span></div><div class="desk-start-grid">'+cards.map((c,i)=>'<button class="desk-start" data-teachgo="'+c[0]+'"><div class="desk-start-top"><span class="desk-tool-icon">'+uiIcon(c[1])+'</span><small>0'+(i+1)+'</small></div><h3>'+c[2]+'</h3><p>'+c[3]+'</p><span class="desk-start-link">'+c[4]+uiIcon('arrow')+'</span></button>').join('')+'</div>'+(lesson?'<section class="desk-resume"><span class="desk-tool-icon">'+uiIcon('book')+'</span><div><small>接着上次的灵感 · 本机草稿</small><h3>'+esc(lesson.title)+'</h3></div><button class="btn" data-teachgo="prep">继续完善 →</button></section>':T().job&&!T().job.complete?'<section class="desk-resume"><div><small>尚未完成的备课</small><h3>'+esc(T().job.brief.topic)+'</h3></div><button class="btn" data-teachgo="prep">继续备课 →</button></section>':'')+'<div class="desk-section-title"><h2>好课，也来自一起准备</h2><span>让教学的日常更有条理</span></div><div class="desk-utilities">'+[['schedule','book','排课工作台','安排时段，检查冲突'],['online','team','在线教研组','分享教案，一起打磨'],['memory','spark','教学偏好','记住你确认的习惯'],['account','settings','账号与云端','保存教案，连接 AI']].map(c=>'<button data-teachgo="'+c[0]+'"><span class="desk-utility-icon">'+uiIcon(c[1])+'</span><span><strong>'+c[2]+'</strong><small>'+c[3]+'</small></span>'+uiIcon('arrow')+'</button>').join('')+'</div><div class="desk-footer"><span>启知未来 · 让每一次准备，都通向更好的课堂。</span><button data-teachgo="templates">浏览教学模板 →</button></div>';
+ const {lesson,job}=T();
+ const cards=[
+  ['prep','edit','备课与课件','填写教学条件、编辑教案，制作课堂 PPT'],
+  ['templates','book','教学模板','按课堂类型选择模板，载入后再按学情调整'],
+  ['team','team','团队备课','分配备课任务，审阅并交换备课包']
+ ];
+ const utilities=[
+  ['schedule','book','排课工作台','安排课次，检查时间冲突'],
+  ['online','team','在线教研组','共享教案，留下审阅意见'],
+  ['memory','check','教学偏好','管理自己确认的备课规则'],
+  ['account','settings','账号与云端','同步教案，绑定个人密钥']
+ ];
+ const date=new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long',timeZone:'Asia/Shanghai'}).format(new Date());
+ const [sampleTitle,sampleSubtitle]=sample.title.split('：',2);
+ const sampleMinutes=sample.phases.reduce((sum,phase)=>sum+phase.minutes,0);
+ const sampleSteps=sample.phases.slice(0,3).map(phase=>'<li><span>'+esc(phase.name)+'</span><span>'+phase.minutes+' 分钟</span></li>').join('');
+ const resumeTitle=lesson?.title||(!job?.complete?job?.brief?.topic:'');
+ const resume=resumeTitle?'<section class="desk-resume"><span class="desk-tool-icon">'+uiIcon('book')+'</span><div><small>'+(lesson?'当前浏览器的教案':'尚未完成的备课')+'</small><h3>'+esc(resumeTitle)+'</h3></div><button class="btn" data-teachgo="prep">继续备课 '+uiIcon('arrow')+'</button></section>':'';
+ return '<div class="desk-heading"><h1>备课工作台</h1><span class="desk-date">'+date+'</span></div>'+
+  '<section class="desk-hero" aria-labelledby="deskHeroTitle"><div class="desk-hero-copy"><h2 id="deskHeroTitle">从课题到课堂课件</h2><p>为教师和支教团队准备教案、课堂活动与可编辑 PPT。</p><div class="row"><button class="btn primary" id="startStudio">开始备课 '+uiIcon('arrow')+'</button><button class="btn desk-secondary" id="judgeDemo">免登录体验示例</button></div><small>使用 AI 生成教案或课件时，需绑定个人 DeepSeek 密钥。</small></div>'+
+  '<div class="desk-art"><div class="desk-art-note"><span>教案示例 · 小学科学 · '+sampleMinutes+' 分钟</span><h3>'+esc(sampleTitle)+'</h3>'+(sampleSubtitle?'<p>'+esc(sampleSubtitle)+'</p>':'')+'<ol aria-label="示例教案的前三个课堂环节">'+sampleSteps+'</ol></div></div></section>'+
+  '<div class="desk-section-title"><h2>备课入口</h2></div><div class="desk-start-grid">'+cards.map(([page,icon,title,description])=>'<button class="desk-start" data-teachgo="'+page+'"><span class="desk-tool-icon">'+uiIcon(icon)+'</span><span class="desk-entry-text"><strong>'+title+'</strong><span class="desk-entry-description">'+description+'</span></span>'+uiIcon('arrow')+'</button>').join('')+'</div>'+
+  resume+
+  '<div class="desk-section-title"><h2>协作与设置</h2></div><div class="desk-utilities">'+utilities.map(([page,icon,title,description])=>'<button data-teachgo="'+page+'"><span class="desk-utility-icon">'+uiIcon(icon)+'</span><span><strong>'+title+'</strong><small>'+description+'</small></span>'+uiIcon('arrow')+'</button>').join('')+'</div>'+
+  '<div class="desk-footer"><span>启知未来 · 协同备课工作台</span><button data-teachgo="templates">浏览教学模板 '+uiIcon('arrow')+'</button></div>';
 };
 const appearanceNav=nav;nav=function(){appearanceNav();document.querySelectorAll('#navigation .nav').forEach(el=>el.setAttribute('aria-current',el.classList.contains('active')?'page':'false'));};
 const appearanceRender=render;
