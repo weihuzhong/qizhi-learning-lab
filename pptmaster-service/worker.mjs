@@ -9,7 +9,7 @@ const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const RUNNER_REVISION='quick-fixed-flow-1';
+const RUNNER_REVISION='quick-fixed-flow-2';
 const pageNumber=number=>String(number).padStart(2,'0');
 const pageFile=number=>pageNumber(number)+'_slide.svg';
 
@@ -177,7 +177,7 @@ async function executeJob(job){
    {role:'system',content:authorSystem+'\n'+execution+'\n'+calibration.stdout},
    {role:'user',content:JSON.stringify({...brief,plan})},
   ];
-  async function author(numbers,issues=[]){
+  async function author(numbers,issues=[],retrySingle=true){
    const isRepair=issues.length>0;
    const previous=isRepair?numbers.map(number=>drafts.get(number)):undefined;
    const request={numbers,task:isRepair?'只修改指定问题页，保留本页用途和整稿风格':'按整稿纲要设计指定页',
@@ -188,9 +188,11 @@ async function executeJob(job){
    }catch(error){
     if(!canRetry(error))throw error;
     if(numbers.length>1){
-     for(const number of numbers)await author([number],issues.filter(issue=>issue.slide===number));
+     // Split a failed pair once. Retrying both again can exhaust the shared job quota.
+     for(const number of numbers)await author([number],issues.filter(issue=>issue.slide===number),false);
      return;
     }
+    if(!retrySingle)throw Error('第 '+numbers[0]+' 页未收到完整设计，请稍后重试');
     try{
      const retry={...request,task:request.task+'。请提交一个更精简、完整的SVG和自然段备注。'};
      output=validatePages(await model(pageOutput,[...context,{role:'user',content:JSON.stringify(retry)}]),numbers,asset);
