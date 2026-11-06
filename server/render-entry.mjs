@@ -4,6 +4,21 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 const backend = 'https://qizhi-wuhaozhe.netlify.app';
+const pptRunner = 'https://qizhi-pptmaster.onrender.com';
+let lastRunnerWake = 0;
+let wakingRunner = false;
+
+function warmPptRunner() {
+  if (wakingRunner || Date.now() - lastRunnerWake < 15000) return;
+  wakingRunner = true;
+  lastRunnerWake = Date.now();
+  // Keep the wake request alive through Render's cold start, outside the user's request.
+  void fetch(pptRunner + '/v1/wake', {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(70000),
+  }).then(response => response.body?.cancel()).catch(() => {}).finally(() => {
+    wakingRunner = false;
+  });
+}
 const port = Number(process.env.PORT || 10000);
 const origin = new URL(process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port).origin;
 const apiRoute = /^\/api\/(?:status$|chat$|lesson(?:\/|$)|cloud\/|deck\/|ppt\/)/;
@@ -36,8 +51,9 @@ async function forwardApi(req, res, url) {
     if (typeof req.headers[name] === 'string') headers.set(name, req.headers[name]);
   }
   const session = req.headers.cookie?.split(';')
-    .map(part => part.trim()).find(part => /^qizhi_session=[a-f0-9]{64}$/.test(part));
-  if (session) headers.set('cookie', session);
+    .map(part => part.trim()).filter(part => /^qizhi_session=[a-f0-9]{64}$/.test(part) ||
+      (url.pathname.startsWith('/api/ppt/') && /^qizhi_ppt_visitor=[a-f0-9]{64}$/.test(part)));
+  if (session?.length) headers.set('cookie', session.join('; '));
   let body;
   if (req.method === 'POST') {
     if (req.headers.origin !== origin) return json(res, 403, { error: '来源不匹配' });
@@ -56,19 +72,24 @@ async function forwardApi(req, res, url) {
     body = Buffer.concat(chunks, size);
   }
 
+  if (url.pathname === '/api/ppt/config' && session?.some(cookie => cookie.startsWith('qizhi_session='))) warmPptRunner();
   const response = await fetch(backend + url.pathname + url.search, {
     method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(90000),
   });
   if (response.status >= 300 && response.status < 400) {
     return json(res, 502, { error: '后端暂不可用，请稍后重试' });
   }
+  if (response.ok && req.method === 'POST' &&
+      (url.pathname === '/api/ppt/jobs' || /^\/api\/ppt\/jobs\/[a-f0-9]{32}\/wake$/.test(url.pathname))) warmPptRunner();
   const output = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
   for (const name of ['content-type', 'content-disposition']) {
     const value = response.headers.get(name);
     if (value) output[name] = value;
   }
   const cookies = response.headers.getSetCookie()
-    .filter(cookie => cookie.startsWith('qizhi_session=') && !/(?:^|;)\s*domain=/i.test(cookie));
+    .filter(cookie => (cookie.startsWith('qizhi_session=') ||
+      (url.pathname === '/api/ppt/jobs' && /^qizhi_ppt_visitor=[a-f0-9]{64}(?:;|$)/.test(cookie))) &&
+      !/(?:^|;)\s*domain=/i.test(cookie));
   if (cookies.length) output['set-cookie'] = cookies;
   res.writeHead(response.status, output);
   if (response.body) await pipeline(Readable.fromWeb(response.body), res);
