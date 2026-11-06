@@ -2,5 +2,6 @@
 !Dockerfile
 !worker.mjs
 !verify-render.py
+!repair-layout.py
 !railway.json
 !fonts.conf
