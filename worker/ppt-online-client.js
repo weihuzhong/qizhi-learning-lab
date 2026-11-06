@@ -1,10 +1,97 @@
 export const pptOnlineClient=String.raw`
 let pptServiceConfig=null,pptSubmitting=false,pptOnlineError='',pptPollTimer=null,pptPolling=false,pptAccessLost='';
+let pptPreview=null,pptDownload=null;
 const pptPhases={queued:'等待后台接单',running:'制作中',preparing:'加载PPTMaster',designing:'设计页面',checking:'整稿检查',exporting:'导出PPTX',rendering:'渲染预览',complete:'整稿完成',draft:'待复核初稿',failed:'制作未完成',cancelled:'已停止'};
 function onlinePptJob(){return T().pptOnline?.job||null;}
-function onlinePptFile(id,name){
- const prefix=onlinePptJob()?.result?.delivery==='temporary'&&!id.startsWith('r-')?'/api/ppt/drafts/':'/api/ppt/jobs/';
- return prefix+encodeURIComponent(id)+(prefix.endsWith('jobs/')?'/file/':'/')+encodeURIComponent(name);
+function onlinePptFile(job,name){
+ const id=encodeURIComponent(job.id),file=encodeURIComponent(name);
+ return job.result?.delivery==='temporary'&&!job.id.startsWith('r-')?
+  '/api/ppt/drafts/'+id+'/'+file:'/api/ppt/jobs/'+id+'/file/'+file;
+}
+function renderPptIfOpen(){
+ if(active==='prep'&&prepTab==='slides')render();
+}
+async function checkPptService(){
+ if(pptServiceConfig?.loading)return;
+ pptServiceConfig={loading:true};
+ renderPptIfOpen();
+ try{
+  const response=await fetch('/api/ppt/config',{signal:AbortSignal.timeout(10000)});
+  if(!response.ok)throw Error();
+  const config=await response.json();
+  if(typeof config.connected!=='boolean')throw Error();
+  pptServiceConfig=config;
+ }catch{
+  pptServiceConfig={message:'暂时无法确认后台状态。可直接提交，或重新检查。'};
+ }
+ renderPptIfOpen();
+}
+async function fetchPptArtifact(url,type,signal){
+ const response=await fetch(url,{signal});
+ if(!response.ok){
+  const data=await response.json().catch(()=>null);
+  throw Object.assign(Error(data?.error||''),{status:response.status});
+ }
+ const file=await response.blob();
+ if(!file.size||file.type.split(';')[0]!==type)throw Error('收到的文件格式有误，请重试。');
+ return file;
+}
+function pptArtifactError(error,preview){
+ if(error.status===401||error.status===403)return '请在创建课件的浏览器中登录原账号，再试一次。';
+ if(error.status===404||error.status===410)return preview?
+  '此页预览文件已失效或缺失。你仍可尝试下载 PPTX。':
+  '这份文件已失效或缺失。教案仍保留，可以重新制作课件。';
+ if(error.name==='TimeoutError')return '后台响应超时，请重试。';
+ return error.message||'暂时无法读取文件，请重试。';
+}
+function pptPreviewHtml(job,page,selected){
+ if(!page?.preview)return '<p class="pm-note">该页没有预览图。可以下载 PPTX 查看。</p>';
+ const url=onlinePptFile(job,page.preview);
+ const preview=pptPreview?.url===url?pptPreview:null;
+ const content=preview?.src?
+  '<img id="pptPreviewImage" class="pm-online-preview" alt="第'+(selected+1)+'页完整设计预览" src="'+esc(preview.src)+'">':
+  preview?.error?'<div class="pm-preview-status" role="status"><p>'+esc(preview.error)+'</p><button type="button" class="btn small" id="pptRetryPreview">重试预览</button></div>':
+  '<p class="pm-preview-status" role="status">正在加载第 '+(selected+1)+' 页预览…</p>';
+ return '<div id="pptPagePreview" data-ppt-preview-url="'+esc(url)+'">'+content+'</div>';
+}
+async function loadPptPreview(url){
+ pptPreview?.controller.abort();
+ const preview={url,controller:new AbortController()};
+ pptPreview=preview;
+ try{
+  const signal=AbortSignal.any([preview.controller.signal,AbortSignal.timeout(65000)]);
+  const file=await fetchPptArtifact(url,'image/png',signal);
+  preview.src=await new Promise((resolve,reject)=>{
+   const reader=new FileReader();
+   reader.onload=()=>resolve(reader.result);
+   reader.onerror=()=>reject(Error('无法读取此页预览，请重试。'));
+   reader.readAsDataURL(file);
+  });
+ }catch(error){
+  if(preview.controller.signal.aborted)return;
+  preview.error=pptArtifactError(error,true);
+ }
+ if(pptPreview===preview)renderPptIfOpen();
+}
+async function downloadPptArtifact(name){
+ const job=onlinePptJob();
+ if(!job?.result||(pptDownload?.id===job.id&&pptDownload.pending)||!['deck.pptx','audit.json'].includes(name))return;
+ const download={id:job.id,pending:true,message:'正在获取'+(name==='deck.pptx'?' PPTX…':'检查记录…')};
+ pptDownload=download;
+ renderPptIfOpen();
+ try{
+  const deck=name==='deck.pptx';
+  const type=deck?'application/vnd.openxmlformats-officedocument.presentationml.presentation':'application/json';
+  const file=await fetchPptArtifact(onlinePptFile(job,name),type,AbortSignal.timeout(65000));
+  if(onlinePptJob()?.id!==job.id)return;
+  const suffix=deck?(job.status==='draft'?'_待复核初稿.pptx':'.pptx'):'_制作检查记录.json';
+  exportBlob(file,job.title+suffix);
+  download.message='';
+ }catch(error){download.message=pptArtifactError(error,false);}
+ finally{
+  download.pending=false;
+  renderPptIfOpen();
+ }
 }
 const pptStylePresets=[
  ['fresh','清新简约','清新简约的课堂演示，米白与深青色，文字简洁，概念与实验用有意义的图解表达。每页围绕一个核心问题，整稿有变化且风格一致。'],
@@ -26,12 +113,18 @@ function pptReviewHtml(job,done){
 }
 function pptDownloadHtml(job,done){
  const temporary=job?.result?.delivery==='temporary';
+ const disabled=pptDownload?.id===job?.id&&pptDownload?.pending?' disabled':'';
  return '<section class="pm-card" aria-labelledby="pptDownloadHeading">'+pptSectionTitle('pptDownloadHeading','4','下载课件')+
   '<div class="pm-downloads">'+(done?
-  '<a class="btn primary pm-download" href="'+onlinePptFile(job.id,'deck.pptx')+'" download><span class="pm-format">PPTX</span><span><strong>'+(job.status==='draft'?'下载可编辑初稿':'下载完整可编辑 PPTX')+'（'+esc(job.result.actualCount)+'页）</strong><small>可在 WPS 或 PowerPoint 中编辑，含教师备注</small></span><span class="pm-download-arrow" aria-hidden="true">↓</span></a>'+
-  '<a class="btn pm-download" href="'+onlinePptFile(job.id,'audit.json')+'" download><span class="pm-format">记录</span><span><strong>查看制作检查记录</strong><small>下载生成与复核记录</small></span><span class="pm-download-arrow" aria-hidden="true">↓</span></a>'+
+  '<button type="button" class="btn primary pm-download" data-ppt-download="deck.pptx"'+disabled+'><span class="pm-format">PPTX</span><span><strong>'+(job.status==='draft'?'下载可编辑初稿':'下载完整可编辑 PPTX')+'（'+esc(job.result.actualCount)+'页）</strong><small>可在 WPS 或 PowerPoint 中编辑，含教师备注</small></span><span class="pm-download-arrow" aria-hidden="true">↓</span></button>'+
+  '<button type="button" class="btn pm-download" data-ppt-download="audit.json"'+disabled+'><span class="pm-format">记录</span><span><strong>下载制作检查记录</strong><small>包含生成与复核记录</small></span><span class="pm-download-arrow" aria-hidden="true">↓</span></button>'+
+  pptDownloadStatus(job)+
   '<p class="pm-note">'+(temporary?'文件暂存在后台，最长保留24小时，后台重启可能提前清除，请及时下载。':'文件在当前浏览器可访问7天，请及时下载。')+'</p>':
   '<div class="pm-download-placeholder"><span class="pm-format">PPTX</span><span><strong>可编辑课件</strong><small>课件生成后，下载入口会出现在这里</small></span></div>')+'</div></section>';
+}
+function pptDownloadStatus(job){
+ return pptDownload?.id===job.id&&pptDownload.message?
+  '<p class="'+(pptDownload.pending?'pm-note':'s2-warn')+'" role="status">'+esc(pptDownload.message)+'</p>':'';
 }
 function pptProgressHtml(job,lost,done){
  const status=job?.status;
@@ -52,8 +145,9 @@ function pptProgressHtml(job,lost,done){
    const finished=!lost&&job&&(done||i<stagesDone);
    return '<li class="'+(finished?'pm-stage-done':i===activeStage?'pm-stage-active':'')+'"'+(i===activeStage?' aria-current="step"':'')+'><span aria-hidden="true">'+(finished?'✓':i+1)+'</span>'+label+'</li>';
   }).join('')+'</ol>'+
-  (done?'<div class="slidethumbs pm-page-list" role="group" aria-label="选择课件预览">'+job.result.pages.map((p,i)=>'<button type="button" data-ppt-online-page="'+i+'" class="'+(selected===i?'active':'')+'" aria-pressed="'+(selected===i)+'">'+(i+1)+' '+esc(p.title)+'</button>').join('')+'</div>'+
-   (page?'<img id="pptPagePreview" class="pm-online-preview" alt="第'+(selected+1)+'页完整设计预览" src="'+onlinePptFile(job.id,page.preview)+'">':'')+'<p class="pm-note">预览来自用于导出的设计稿，实际显示效果请在 PowerPoint 中核对。</p>':'')+'</section>';
+  (done?'<div class="s2-toolbar"><button type="button" class="btn primary" data-ppt-download="deck.pptx"'+(pptDownload?.id===job.id&&pptDownload?.pending?' disabled':'')+'>下载 PPTX</button></div>'+pptDownloadStatus(job)+
+   '<div class="slidethumbs pm-page-list" role="group" aria-label="选择课件预览">'+(job.result.pages||[]).map((p,i)=>'<button type="button" data-ppt-online-page="'+i+'" class="'+(selected===i?'active':'')+'" aria-pressed="'+(selected===i)+'">'+(i+1)+' '+esc(p.title)+'</button>').join('')+'</div>'+
+   pptPreviewHtml(job,page,selected):'')+'</section>';
 }
 slidesHtml=function(){
  const lesson=T().lesson,j=onlinePptJob(),lost=j&&pptAccessLost===j.id;
@@ -79,9 +173,11 @@ slidesHtml=function(){
   '</div><label for="pptOnlineStyle">视觉方向与教学要求</label>'+
   '<textarea id="pptOnlineStyle" class="input" rows="3" maxlength="1500"'+disabled+' placeholder="例如：使用清晰的概念图解和实验流程">'+esc(style)+'</textarea></div></div>'+
   '<!-- ppt-reference -->'+
-  '<div class="pm-actions"><div class="pm-action-buttons"><button type="button" class="btn primary" id="pptOnlineCreate"'+(disabled||!ready||!pptServiceConfig?.connected?' disabled':'')+'>'+uiIcon('spark')+'<span>'+(pptSubmitting?'正在提交…':'直接生成整份 PPT')+'</span></button>'+
+  '<div class="pm-actions"><div class="pm-action-buttons"><button type="button" class="btn primary" id="pptOnlineCreate"'+(disabled||!ready||pptServiceConfig?.connected===false?' disabled':'')+'>'+uiIcon('spark')+'<span>'+(pptSubmitting?'正在提交…':'直接生成整份 PPT')+'</span></button>'+
   (running?'<button type="button" class="btn" id="pptOnlineCancel">停止这次制作</button>':'')+'</div><p class="pm-note">提交后在后台制作，刷新页面可继续查看进度。</p></div>'+
-  (!pptServiceConfig||pptServiceConfig.loading?'<div class="notice" role="status">正在检查后台执行服务…</div>':!pptServiceConfig.connected?'<div class="s2-warn" role="alert">'+esc(pptServiceConfig.message||'后台执行服务暂不可用。')+'</div>':'')+
+  (!pptServiceConfig||pptServiceConfig.loading?'<p class="pm-note" role="status">正在检查后台执行服务…</p>':
+   !pptServiceConfig.connected?'<div class="s2-warn" role="status">'+esc(pptServiceConfig.message||'后台执行服务暂不可用。')+
+   ' <button type="button" class="btn small" id="pptRetryConfig">重新检查</button></div>':'')+
   (!ready?'<div class="s2-warn">制作前请先登录并绑定自己的 DeepSeek API 密钥。<button class="btn" id="pptBillingAccount" type="button">前往登录与绑定</button></div>':'')+
   (pptOnlineError?'<div class="s2-warn" role="alert">'+esc(pptOnlineError)+(lost?'<div class="s2-toolbar"><button class="btn" id="pptDiscardUnavailable" type="button">关闭旧任务记录</button></div>':'')+'</div>':'')+
   '</section>'+pptProgressHtml(j,lost,done)+'<div class="pm-bottom">'+pptReviewHtml(j,done)+pptDownloadHtml(j,done)+'</div></div>';
@@ -123,11 +219,9 @@ async function pollOnlinePpt(id){
 const pptOnlineRender=render;
 render=function(){
  pptOnlineRender();
- if(active!=='prep'||prepTab!=='slides')return;
- if(pptServiceConfig===null){
-  pptServiceConfig={loading:true};
-  api('ppt/config').then(config=>{pptServiceConfig=config;render();})
-   .catch(error=>{pptServiceConfig={connected:false,message:error.message};render();});
+ if(active!=='prep'||prepTab!=='slides'||!T().lesson){
+  pptPreview?.controller.abort();pptPreview=null;
+  return;
  }
  const countField=$('pptOnlineCount'),styleField=$('pptOnlineStyle');
  const countButtons=document.querySelectorAll('[data-ppt-count]');
@@ -152,6 +246,7 @@ render=function(){
  }
  bindId('pptBackToLesson',()=>{prepTab='preview';go('prep');});
  bindId('pptBillingAccount',()=>go('account'));
+ bindId('pptRetryConfig',checkPptService);
  bindId('pptDiscardUnavailable',()=>{T().pptOnline.job=null;pptAccessLost='';pptOnlineError='';saveTeaching();render();});
  bindId('pptOnlineCreate',async()=>{
   if(pptSubmitting)return;
@@ -175,9 +270,25 @@ render=function(){
   T().pptOnline.selected=Number(button.dataset.pptOnlinePage);saveTeaching();render();
   if(button.hasAttribute('data-ppt-review-jump'))$('pptPagePreview')?.scrollIntoView({block:'start'});
  });
+ document.querySelectorAll('[data-ppt-download]').forEach(button=>button.onclick=()=>downloadPptArtifact(button.dataset.pptDownload));
+ const previewUrl=$('pptPagePreview')?.dataset?.pptPreviewUrl;
+ if(previewUrl){
+  if(pptPreview?.url!==previewUrl)void loadPptPreview(previewUrl);
+  bindId('pptRetryPreview',()=>{void loadPptPreview(previewUrl);render();});
+  const image=$('pptPreviewImage');
+  if(image)image.onerror=()=>{
+   if(pptPreview?.url!==previewUrl||$('pptPreviewImage')!==image)return;
+   pptPreview.src=null;
+   pptPreview.error='预览图无法显示。可以重试预览或下载 PPTX。';
+   renderPptIfOpen();
+  };
+ }else if(pptPreview){
+  pptPreview.controller.abort();pptPreview=null;
+ }
  if(onlinePptJob()&&['queued','running'].includes(onlinePptJob().status)&&pptAccessLost!==onlinePptJob().id&&!pptPollTimer&&!pptPolling){
   pptPollTimer=setTimeout(()=>pollOnlinePpt(onlinePptJob().id),1000);
  }
+ if(pptServiceConfig===null)void checkPptService();
 };
 `;
 export const pptOnlineStyles=String.raw`<style>
@@ -258,7 +369,10 @@ export const pptOnlineStyles=String.raw`<style>
 .pm-workbench .pm-format{min-width:40px;min-height:38px;border-radius:8px;font-size:11px}
 .pm-workbench .pm-download.primary .pm-format{color:inherit;background:color-mix(in srgb,currentColor 14%,transparent)}
 .pm-workbench .pm-page-list{margin-top:14px}
-.pm-workbench .pm-online-preview{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:contain;background:var(--pm-soft);border:1px solid var(--pm-line);border-radius:12px;margin:12px 0 8px;scroll-margin-top:85px}
+.pm-workbench #pptPagePreview{scroll-margin-top:85px;margin-top:12px}
+.pm-workbench .pm-online-preview{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:contain;background:var(--pm-soft);border:1px solid var(--pm-line);border-radius:12px}
+.pm-workbench .pm-preview-status{margin:0;padding:14px;background:var(--pm-soft);border:1px solid var(--pm-line);border-radius:12px;color:var(--muted)}
+.pm-workbench .pm-preview-status p{margin:0 0 8px}
 @media(max-width:850px){.pm-workbench .pm-stage-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:680px){.pm-workbench{gap:14px}.pm-workbench .pm-card{padding:16px}.pm-workbench .pm-settings,.pm-workbench .pm-bottom{grid-template-columns:1fr;gap:14px}.pm-workbench .pm-title{flex-wrap:wrap;gap:8px}.pm-workbench .pm-review li{flex-wrap:wrap}}
 @media(max-width:420px){.pm-workbench .pm-stage-list,.pm-workbench .pm-style-options{grid-template-columns:repeat(2,minmax(0,1fr))}.pm-workbench .pm-source{gap:8px;padding:9px}.pm-workbench .pm-source-icon{width:30px;height:30px}.pm-workbench .pm-source button{padding-inline:7px}.pm-workbench .pm-credit{white-space:normal}}
