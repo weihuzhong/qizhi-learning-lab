@@ -98,9 +98,8 @@ export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=ppt
    let visitor=req.headers.get('cookie')?.match(/(?:^|;\s*)qizhi_ppt_visitor=([a-f0-9]{64})(?:;|$)/)?.[1];
    if(path==='/api/ppt/jobs'&&req.method==='POST'){
     if(!billing)reject('请先登录并绑定个人DeepSeek API密钥',401);const account=await billing.forRequest(req);
-    const ip=req.headers.get('x-nf-client-connection-ip')||'unknown';await throttle('create-ip/'+digest(ip),12,86400000);
     validateLesson(b.lesson);const count=Number(b.count);if(!Number.isInteger(count)||count<4||count>20)reject('课件页数须为4至20');if(JSON.stringify(b.lesson).length>45000)reject('教案过长，请精简后制作');
-    visitor ||= randomBytes(32).toString('hex');const owner=digest(visitor);await throttle('create-visitor/'+owner,6,86400000);
+    visitor ||= randomBytes(32).toString('hex');const owner=digest(visitor);
     const id=randomBytes(16).toString('hex'),now=Date.now();const j={id,owner,billingUserId:account.userId,lesson:b.lesson,brief:b.brief||{},count,style:String(b.style||'清晰、现代、图解优先的课堂演示').slice(0,1500),mode:'direct',status:'queued',createdAt:now,updatedAt:now,expiresAt:now+7*86400000,calls:0,reviewRequired:true};
     await store.setJSON('jobs/'+id,j,{onlyIfNew:true});await update('queue',async q=>{const records=await Promise.all((q||[]).map(async key=>({key,value:await get('jobs/'+key)})));const active=records.filter(x=>x.value&&['queued','running'].includes(x.value.status)&&x.value.expiresAt>Date.now()).map(x=>x.key);if(active.length>=30)reject('当前排队较多，请稍后提交；已有任务会继续制作',503);return [...active,id];});await wake();
     return json({job:publicJob(j)},202,{'set-cookie':'qizhi_ppt_visitor='+visitor+'; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800'});

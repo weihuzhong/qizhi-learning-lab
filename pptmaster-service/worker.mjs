@@ -5,11 +5,14 @@ import os from 'node:os';
 import {spawn} from 'node:child_process';
 import {sign,createHash,generateKeyPairSync,createPublicKey} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {createOverflow} from './overflow.mjs';
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const RUNNER_REVISION='quick-draft-delivery-1';
+const RUNNER_REVISION='quick-overflow-queue-1';
+const overflow=createOverflow({base:BASE,origin:'https://qizhi-learning-lab.onrender.com',
+ directory:path.join(os.tmpdir(),'qizhi-overflow-jobs')});
 const draftDirectory=path.join(os.tmpdir(),'qizhi-ppt-drafts');
 const draftLifetime=24*60*60*1000;
 const draftMarker='初稿已生成，请从参赛网站下载并查看逐页复核建议。';
@@ -201,11 +204,13 @@ function validatePage(pages,number,asset){
 }
 
 async function executeJob(job){
+ const isOverflow=job.id.startsWith('r-');
+ const call=isOverflow?(route,body)=>overflow.call(job,route,body):api;
  const root=await mkdtemp(path.join(os.tmpdir(),'qizhi-ppt-'));
  const auth={id:job.id,runId:job.runId},calls=[],drafts=new Map();
  const start=Date.now();
  let modelTurns=0,reviewTurns=0;
- const progress=(phase,message)=>api('progress',{...auth,phase,pages:drafts.size,message});
+ const progress=(phase,message)=>call('progress',{...auth,phase,pages:drafts.size,message});
  const run=async(script,args=[],errorMessage)=>{
   const local=script==='verify-render.py'||script==='repair-layout.py';
   const file=local?path.join(HERE,script):path.join(SKILL,'scripts',script);
@@ -220,7 +225,7 @@ async function executeJob(job){
  const model=async(tool,messages)=>{
   if(Date.now()-start>45*60000)throw Error('课件后台处理超过时限，请重新提交');
   modelTurns++;
-  return parseOutput(await api('model',{...auth,messages,tools:[tool]}),tool.function.name);
+  return parseOutput(await call('model',{...auth,messages,tools:[tool]}),tool.function.name);
  };
 
  try{
@@ -326,8 +331,8 @@ async function executeJob(job){
 
   await progress('designing','正在按整稿结构设计页面');
   await author([1],[],true,'按整稿纲要单独制作封面。保留课题标题、核心导入问题和一个简洁的可编辑主视觉。');
-  for(let first=2;first<=job.count;first+=2){
-   const numbers=first===job.count?[first]:[first,first+1];
+  for(let first=2;first<=job.count;first+=(isOverflow?1:2)){
+   const numbers=isOverflow||first===job.count?[first]:[first,first+1];
    await author(numbers);
   }
 
@@ -372,8 +377,9 @@ async function executeJob(job){
   async function repair(issues,label,layoutPrompt){
    const numbers=[...new Set(issues.map(issue=>issue.slide))].sort((a,b)=>a-b);
    await progress('checking','正在修正'+label+'涉及的页面 '+numbers.join('、'));
-   for(let i=0;i<numbers.length;i+=2){
-    const batch=numbers.slice(i,i+2);
+   const batchSize=isOverflow?1:2;
+   for(let i=0;i<numbers.length;i+=batchSize){
+    const batch=numbers.slice(i,i+batchSize);
     await author(batch,issues.filter(issue=>batch.includes(issue.slide)),true,layoutPrompt);
    }
   }
@@ -422,7 +428,7 @@ async function executeJob(job){
   for(let attempt=0;attempt<2;attempt++){
    try{
     reviewTurns++;
-    contentReview=await api('review',{...auth,slides});
+    contentReview=await call('review',{...auth,slides});
     break;
    }catch(error){
     if(error.status===409)throw error;
@@ -462,7 +468,9 @@ async function executeJob(job){
   await writeFile(auditFile,JSON.stringify(audit,null,2));
   const deliverables=[['deck.pptx',pptx],['audit.json',auditFile],
    ...result.pages.map((page,i)=>['page-'+pageNumber(i+1)+'.png',page.preview])];
-  if(isDraft&&!(await supportsDurableDrafts())){
+  if(isOverflow){
+   await overflow.publish(job,published,deliverables);
+  }else if(isDraft&&!(await supportsDurableDrafts())){
    await saveTemporaryDraft(auth,published,deliverables);
   }else{
    const upload=async([name,file])=>{
@@ -478,7 +486,7 @@ async function executeJob(job){
  }catch(error){
   const message=error.status||error instanceof PageOutputError||/[\u4e00-\u9fff]/.test(error.message)
    ?error.message:'后台制作暂时失败，请稍后重试';
-  await api('fail',{...auth,error:message}).catch(()=>{});
+  await call('fail',{...auth,error:message}).catch(()=>{});
   throw error;
  }finally{
   if(process.env.PPTMASTER_KEEP_TEST_OUTPUT){
@@ -488,12 +496,19 @@ async function executeJob(job){
  }
 }
 let busy=false,drainAgain=false;
-async function drain(){if(busy){drainAgain=true;return;}busy=true;try{do{drainAgain=false;for(;;){const {job}=await api('claim',{});if(!job)break;console.log('PPTMaster job started:',job.id);try{await executeJob(job);console.log('PPTMaster job complete:',job.id);}catch(e){console.error('PPTMaster job failed:',job.id,String(e.message).slice(0,400));}}}while(drainAgain);}finally{busy=false;}}
+async function drain(){if(busy){drainAgain=true;return;}busy=true;try{do{drainAgain=false;for(;;){const job=overflow.claim()||(await api('claim',{})).job;if(!job)break;console.log('PPTMaster job started:',job.id);try{await executeJob(job);console.log('PPTMaster job complete:',job.id);}catch(e){console.error('PPTMaster job failed:',job.id,String(e.message).slice(0,400));}}}while(drainAgain);}finally{busy=false;}}
 if(process.argv.includes('--once')){await drain();}
 else{
  const bootGuard=await command('python3',[path.join(SKILL,'scripts/attribution_guard.py')],{cwd:HERE});if(bootGuard.code!==0)throw Error('PPTMaster startup integrity check failed');const previewFont=await command('fc-match',['-f','%{family}','Microsoft YaHei'],{cwd:HERE});if(previewFont.code!==0||!previewFont.stdout.includes('Noto Sans CJK SC'))throw Error('Chinese preview font alias missing');let lastWake=0,wakeTimer=null;
+ function wake(){
+  if(busy){drainAgain=true;return;}
+  const wait=Math.max(0,10000-(Date.now()-lastWake));
+  if(wakeTimer)return;
+  wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);
+ }
  const server=http.createServer(async(req,res)=>{
+  if(await overflow.handle(req,res,wake))return;
   const draft=req.method==='GET'&&req.url?.match(/^\/api\/ppt\/drafts\/([a-f0-9]{32})(?:\/(deck\.pptx|page-\d{2}\.png|audit\.json))?$/);
   if(draft)return serveTemporaryDraft(req,res,draft);
-  if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,revision:RUNNER_REVISION,integrity:true,busy,previewFont:previewFont.stdout.trim(),publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(busy){drainAgain=true;return;}const wait=Math.max(0,10000-(Date.now()-lastWake));if(wakeTimer)return;wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
+  if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,revision:RUNNER_REVISION,integrity:true,busy,previewFont:previewFont.stdout.trim(),publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');wake();return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
 }

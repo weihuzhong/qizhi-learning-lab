@@ -57,6 +57,23 @@ test('automatic frontend submits a background job and downloads originals withou
 
 test('completed history cannot push an older waiting task out of the queue',async()=>{const store=new Store(),api=createPptService(store,{},{workerKey:keys.publicKey,runnerURL:"",billing:fixtureBilling()});const oldest=await call(api,'jobs',source);const queue=[oldest.data.job.id];for(let n=0;n<90;n++){const id=n.toString(16).padStart(32,'0');queue.push(id);await store.setJSON('jobs/'+id,{id,status:'complete',expiresAt:Date.now()+100000});}await store.setJSON('queue',queue);const newer=await call(api,'jobs',source);assert.equal(newer.status,202);const claim=await call(api,'worker/claim',{},'',true);assert.equal(claim.data.job.id,oldest.data.job.id);assert.equal((await store.get('queue')).length,2);});
 
+test('PPT submissions do not have a daily browser or IP quota',async()=>{
+ const store=new Store(),api=createPptService(store,{},{workerKey:keys.publicKey,runnerURL:"",billing:fixtureBilling()});
+ let cookie='';
+ for(let i=0;i<15;i++){
+  const submitted=await call(api,'jobs',source,cookie);
+  assert.equal(submitted.status,202);cookie=submitted.cookie;
+  const {job}= (await call(api,'worker/claim',{},'',true)).data;
+  if(i%2===0){
+   const failed=await call(api,'worker/fail',{id:job.id,runId:job.runId,error:'test'},'',true);
+   assert.equal(failed.data.job.status,'failed');
+  }else{
+   await store.setJSON('jobs/'+job.id,{...job,status:'complete'});
+  }
+ }
+ assert.equal((await call(api,'jobs',source,cookie)).status,202);
+});
+
 test('executor identity loads only a public key from its fixed HTTPS origin',async()=>{const publicKey=keys.publicKey,keyId=createHash('sha256').update(publicKey).digest('hex'),header='Bearer '+Buffer.from(JSON.stringify({alg:'RS256',kid:keyId})).toString('base64url')+'.payload.signature';let calls=0;const loader=async url=>{calls++;assert.equal(url,'https://executor-identity.test/health');return Response.json({engine:'ppt-master',integrity:true,sourceCommit:'3c956467cd053fec36816cb7d2ca973729a5d4d1',publicKey,keyId})};assert.equal(await resolvePptWorkerKey('https://executor-identity.test',header,loader),publicKey);assert.equal(await resolvePptWorkerKey('https://executor-identity.test',header,loader),publicKey);assert.equal(calls,1);await assert.rejects(()=>resolvePptWorkerKey('http://unsafe.test',header,loader));await assert.rejects(()=>resolvePptWorkerKey('https://executor-identity.test','Bearer invalid',loader));});
 
 

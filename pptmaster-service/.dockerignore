@@ -1,6 +1,7 @@
 **
 !Dockerfile
 !worker.mjs
+!overflow.mjs
 !verify-render.py
 !repair-layout.py
 !railway.json
