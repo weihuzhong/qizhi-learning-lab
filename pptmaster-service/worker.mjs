@@ -9,7 +9,7 @@ const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const RUNNER_REVISION='quick-layout-repair-1';
+const RUNNER_REVISION='quick-page-recovery-1';
 const pageNumber=number=>String(number).padStart(2,'0');
 const pageFile=number=>pageNumber(number)+'_slide.svg';
 
@@ -27,7 +27,9 @@ async function api(route,body){
  for(let attempt=0;attempt<attempts;attempt++){
   try{
    const r=await fetch(BASE+'/api/ppt/worker/'+route,{method:'POST',headers:{authorization:'Bearer '+token(),'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(55000)});
-   const data=await r.json();
+   const data=await r.json().catch(()=>{
+    throw Object.assign(Error('后台返回了无法读取的响应'),{status:r.ok?502:r.status});
+   });
    if(!r.ok)throw Object.assign(Error(data.error||'Backend request failed'),{status:r.status,providerStatus:data.upstream_status});
    return data;
   }catch(error){
@@ -81,38 +83,55 @@ function parseOutput(response,name){
    if(calls.length!==1||calls[0].function?.name!==name)throw Error();
    return JSON.parse(calls[0].function.arguments);
   }
-  const content=response.message.content?.trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi,'');
+  const content=stripFence(response.message.content||'','json');
   return JSON.parse(content);
  }catch{throw new PageOutputError('模型没有返回完整的结构化结果');}
 }
 
 function canRetry(error){
  return error instanceof PageOutputError||
-  ((!error.status||error.status>=500)&&(!error.providerStatus||error.providerStatus>=500));
+  ((!error.status||error.status===408||error.status>=500)&&
+   (!error.providerStatus||error.providerStatus===408||error.providerStatus>=500));
 }
 
-function validatePages(output,numbers,asset){
- if(!Array.isArray(output?.pages)||output.pages.length!==numbers.length){
-  throw new PageOutputError('返回页数与本组要求不一致');
+function stripFence(value,language){
+ const marker='\x60'.repeat(3);
+ const lines=value.trim().split(/\r?\n/);
+ if([marker,marker+language].includes(lines[0].toLowerCase())&&lines.at(-1)===marker){
+  return lines.slice(1,-1).join('\n').trim();
  }
- return output.pages.map((page,index)=>{
-  if(page?.number!==numbers[index]||typeof page.svg!=='string'||typeof page.notes!=='string'){
-   throw new PageOutputError('页码顺序或页面格式不正确');
-  }
-  const svg=page.svg.trim();
-  const notes=page.notes.trim();
-  // Model output is untrusted. Only native SVG with document-local references is accepted.
-  const unsafe=/<\s*\?|<!|<\/?(?:[\w.-]+:)?(?:script|style|foreignObject|a|use)\b|\s(?:style|src|on\w+|xml:base)\s*=/i;
-  const hrefs=svg.matchAll(/\b(?:href)\s*=\s*(['"])(.*?)\1/gi);
-  const urls=svg.matchAll(/\burl\s*\(([^)]*)\)/gi);
-  const external=[...hrefs].some(match=>!/^#[\w.-]+$/.test(match[2])&&match[2]!==asset?.href)||
-   [...urls].some(match=>!/^#[\w.-]+$/.test(match[1]));
-  if(svg.length>24000||!/^<svg\s/.test(svg)||!svg.endsWith('</svg>')||unsafe.test(svg)||external||
-    !notes||notes.length>1600||/^\s*(?:#{1,6}\s|---+\s*$)/m.test(notes)){
-   throw new PageOutputError('SVG或教师备注不符合交付格式');
-  }
-  return {number:page.number,svg,notes};
- });
+ return value.trim();
+}
+
+function pageFailure(error){
+ if(error instanceof PageOutputError)return error.message;
+ if(error.name==='TimeoutError'||[408,504].includes(error.status)||[408,504].includes(error.providerStatus)){
+  return '模型请求超时';
+ }
+ return error.status?'模型网关暂不可用':'模型连接中断';
+}
+
+function validatePage(pages,number,asset){
+ const matches=pages.filter(page=>page?.number===number||
+  (typeof page?.number==='string'&&/^\d{1,2}$/.test(page.number)&&Number(page.number)===number));
+ if(matches.length!==1)throw new PageOutputError('模型没有返回唯一的指定页码');
+ const [page]=matches;
+ if(typeof page.svg!=='string'||typeof page.notes!=='string')throw new PageOutputError('模型漏掉了SVG或教师备注');
+ const svg=stripFence(page.svg,'svg')
+  .replace(/^<\?xml\s+version=["']1\.0["'](?:\s+encoding=["']UTF-8["'])?\s*\?>\s*/i,'')
+  .replace(/<!--[\s\S]*?-->/g,'').trim();
+ const notes=stripFence(page.notes,'markdown').split(/\r?\n/)
+  .filter(line=>!/^\s*---+\s*$/.test(line)).map(line=>line.replace(/^\s*#{1,6}\s+/,'')).join('\n').trim();
+ // Model output is untrusted. Only native SVG with document-local references is accepted.
+ const unsafe=/<\s*\?|<!|<\/?(?:[\w.-]+:)?(?:script|style|foreignObject|a|use)\b|\s(?:style|src|on\w+|xml:base)\s*=/i;
+ const hrefs=svg.matchAll(/\b(?:href)\s*=\s*(['"])(.*?)\1/gi);
+ const urls=svg.matchAll(/\burl\s*\(([^)]*)\)/gi);
+ const external=[...hrefs].some(match=>!/^#[\w.-]+$/.test(match[2])&&match[2]!==asset?.href)||
+  [...urls].some(match=>!/^#[\w.-]+$/.test(match[1]));
+ if(svg.length>24000||!/^<svg\s/.test(svg)||!svg.endsWith('</svg>'))throw new PageOutputError('模型返回的SVG不完整或过长');
+ if(unsafe.test(svg)||external)throw new PageOutputError('SVG含不支持的元素或外部资源');
+ if(!notes||notes.length>1600)throw new PageOutputError('教师备注为空或过长');
+ return {number,svg,notes};
 }
 
 async function executeJob(job){
@@ -187,39 +206,61 @@ async function executeJob(job){
    {role:'system',content:authorSystem+'\n'+execution+'\n'+calibration.stdout},
    {role:'user',content:JSON.stringify({...brief,plan})},
   ];
+  let splitRetries=4;
   async function author(numbers,issues=[],retrySingle=true,layoutPrompt){
    const isRepair=issues.length>0;
    const previous=isRepair?numbers.map(number=>drafts.get(number)):undefined;
    const request={numbers,task:layoutPrompt||(isRepair?'只修改指定问题页，保留本页用途和整稿风格':'按整稿纲要设计指定页'),
     issues,previous};
-   let output;
-   try{
-    output=validatePages(await model(pageOutput,[...context,{role:'user',content:JSON.stringify(request)}]),numbers,asset);
-   }catch(error){
-    if(!canRetry(error))throw error;
-    if(numbers.length>1){
-     // Split a failed pair once. Retrying both again can exhaust the shared job quota.
-     for(const number of numbers)await author([number],issues.filter(issue=>issue.slide===number),false,layoutPrompt);
-     return;
-    }
-    if(!retrySingle)throw Error('第 '+numbers[0]+' 页未收到完整设计，请稍后重试');
+   async function deliver(input){
+    let pages;
     try{
-     const retry={...request,task:request.task+'。请提交一个更精简、完整的SVG和自然段备注。'};
-     output=validatePages(await model(pageOutput,[...context,{role:'user',content:JSON.stringify(retry)}]),numbers,asset);
-    }catch(retryError){
-     if(!canRetry(retryError))throw retryError;
-     throw Error('第 '+numbers[0]+' 页未收到完整设计，请稍后重试');
+     const output=await model(pageOutput,[...context,{role:'user',content:JSON.stringify(input)}]);
+     pages=Array.isArray(output)?output:output?.pages;
+     if(!Array.isArray(pages))throw new PageOutputError('模型没有返回页面列表');
+    }catch(error){
+     if(!canRetry(error))throw error;
+     const reason=pageFailure(error);
+     console.warn('PPTMaster page response:',job.id,JSON.stringify({pages:input.numbers,reason}));
+     return new Map(input.numbers.map(number=>[number,reason]));
     }
+    const failed=new Map();
+    for(const number of input.numbers){
+     let page;
+     try{
+      page=validatePage(pages,number,asset);
+     }catch(error){
+      failed.set(number,pageFailure(error));
+      continue;
+     }
+     await writeFile(path.join(svgDir,pageFile(number)),page.svg,'utf8');
+     drafts.set(number,page);
+    }
+    if(failed.size)console.warn('PPTMaster page response:',job.id,JSON.stringify([...failed]));
+    return failed;
    }
-   for(const page of output){
-    await writeFile(path.join(svgDir,pageFile(page.number)),page.svg,'utf8');
-    drafts.set(page.number,page);
+
+   let failed=await deliver(request);
+   if(failed.size&&numbers.length>1){
+    if(!isRepair&&failed.size<numbers.length)await progress('designing','已设计 '+drafts.size+' / '+job.count+' 页，正在补齐未返回的页面');
+    for(const number of failed.keys()){
+     await author([number],issues.filter(issue=>issue.slide===number),false,layoutPrompt);
+    }
+    return;
    }
+   if(failed.size&&(retrySingle||(!layoutPrompt&&splitRetries>0))){
+    if(!retrySingle)splitRetries--;
+    const reason=failed.get(numbers[0]);
+    failed=await deliver({...request,task:request.task+'。上次未能交付：'+reason+
+     '。只返回指定的这一页和一段简短教师备注。用简单、紧凑的原生文字与图形，减少装饰，确保返回完整。'});
+   }
+   if(failed.size)throw Error('第 '+numbers[0]+' 页生成失败：'+failed.get(numbers[0])+'。教案已保留，可重试');
    if(!isRepair)await progress('designing','已设计 '+drafts.size+' / '+job.count+' 页');
   }
 
   await progress('designing','正在按整稿结构设计页面');
-  for(let first=1;first<=job.count;first+=2){
+  await author([1],[],true,'按整稿纲要单独制作封面。保留课题标题、核心导入问题和一个简洁的可编辑主视觉。');
+  for(let first=2;first<=job.count;first+=2){
    const numbers=first===job.count?[first]:[first,first+1];
    await author(numbers);
   }
