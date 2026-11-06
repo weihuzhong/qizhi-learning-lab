@@ -51,7 +51,7 @@ def render_svg(svg, preview, project, skill_dir=None):
                        url_fetcher=project_asset, unsafe=False)
 
 
-def verify_and_render(project, deck, expected, skill_dir=None):
+def verify_and_render(project, deck, expected, skill_dir=None, *, render=True):
     project, deck = Path(project).resolve(), Path(deck).resolve()
     presentation = Presentation(deck)
     pages = sorted((project / 'svg_output').glob('*.svg'))
@@ -60,7 +60,8 @@ def verify_and_render(project, deck, expected, skill_dir=None):
     if max(p.stat().st_mtime_ns for p in pages) > deck.stat().st_mtime_ns:
         raise ValueError('SVG在PPTX导出后被修改，请重新检查并导出，确保预览与成稿一致')
     output = project / 'web_preview'
-    output.mkdir(exist_ok=True)
+    if render:
+        output.mkdir(exist_ok=True)
     result = []
 
     def texts(shapes):
@@ -79,10 +80,15 @@ def verify_and_render(project, deck, expected, skill_dir=None):
         if not slide.has_notes_slide or not slide.notes_slide.notes_text_frame.text.strip():
             raise ValueError(f'第{index}页缺少教师指导备注')
         preview = output / f'page-{index:02}.png'
-        render_svg(svg, preview, project, skill_dir)
+        if render:
+            render_svg(svg, preview, project, skill_dir)
         result.append({'text': '\n'.join(text)[:8000], 'title': next((x.strip().split('\n')[0][:80] for x in text if x.strip()), f'第{index}页'), 'preview': str(preview)})
     return {'count': len(presentation.slides), 'pages': result}
 
 
 if __name__ == '__main__':
-    print(json.dumps(verify_and_render(sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] if len(sys.argv) > 4 else None), ensure_ascii=False))
+    args = [arg for arg in sys.argv[1:] if arg != '--text-only']
+    print(json.dumps(verify_and_render(
+        args[0], args[1], int(args[2]), args[3] if len(args) > 3 else None,
+        render='--text-only' not in sys.argv,
+    ), ensure_ascii=False))
