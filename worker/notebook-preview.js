@@ -65,6 +65,17 @@ export const notebookStyles=String.raw`<style id="qizhi-notebook-preview">
 .notebook-phases li[data-main] {color:var(--notebook-accent);font-weight:600}
 .notebook-phases .notebook-minute {font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .notebook-sheet .notebook-mobile-note {display:none}
+.notebook-board.notebook-structure {align-content:stretch;min-height:320px}
+.notebook-structure .notebook-sheet {display:flex;flex-direction:column;justify-content:center;padding:24px}
+.notebook-structure-label {display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;line-height:16px}
+.notebook-structure-label::before {content:"";width:16px;height:1px;background:currentColor}
+.notebook-structure .notebook-sheet h2 {margin:12px 0 16px;font-size:clamp(23px,2.5vw,34px);font-weight:500}
+.notebook-structure-rows {list-style:none;margin:0;padding:0;border-top:1px solid var(--notebook-rule)}
+.notebook-structure-rows li {display:grid;grid-template-columns:24px 64px minmax(0,1fr);align-items:center;gap:8px;min-height:44px;border-bottom:1px solid var(--notebook-rule);line-height:20px}
+.notebook-structure-rows li:last-child {border:0}
+.notebook-structure-rows strong {font-size:14px;font-weight:500}
+.notebook-structure-number {color:var(--notebook-accent);font-size:12px;font-variant-numeric:tabular-nums}
+.notebook-structure-question {color:var(--muted);font-size:13px}
 .notebook-heading {margin:24px 0 8px}
 .notebook-heading h2 {margin:0;font-size:18px;font-weight:600}
 .notebook-heading>span {color:var(--muted);font-size:12px}
@@ -127,6 +138,12 @@ export const notebookStyles=String.raw`<style id="qizhi-notebook-preview">
   .notebook-cover-copy {padding:24px}
   .notebook-board {padding:16px}
   .notebook-sheet {padding:16px}
+  .notebook-board.notebook-structure {min-height:256px}
+  .notebook-structure .notebook-sheet {padding:16px}
+  .notebook-structure .notebook-sheet h2 {margin:8px 0 12px}
+  .notebook-structure-rows li {grid-template-columns:20px 56px minmax(0,1fr);min-height:40px}
+  .notebook-structure-rows strong {font-size:13px}
+  .notebook-structure-question {font-size:12px}
   .notebook-cover h1 {font-size:40px}
 }
 @media(max-width:768px) {
@@ -201,24 +218,32 @@ function notebookLessonSheet(lesson,brief){
   return '<div class="notebook-board"><section class="notebook-sheet"><div class="notebook-sheet-meta">当前课题</div><h2>'+
    esc(brief.topic)+'</h2><p>生成并确认大纲后，这里会显示本课的课堂流程。</p></section></div>';
  }
- const plan=lesson||sample;
- const details=lesson?T().lessonBrief:exampleBrief;
- const [topic,subtitle]=plan.title.split('：',2);
- const duration=plan.phases.reduce((total,phase)=>total+phase.minutes,0);
- const longest=Math.max(...plan.phases.map(phase=>phase.minutes));
+ if(!lesson){
+  return '<div class="notebook-board notebook-structure"><section class="notebook-sheet" aria-labelledby="notebookLessonTitle">'+
+   '<div class="notebook-structure-label">教案结构</div><h2 id="notebookLessonTitle">一份教案的三个部分</h2>'+
+   '<ol class="notebook-structure-rows" role="list">'+
+   '<li><span class="notebook-structure-number" aria-hidden="true">01</span><strong>教学目标</strong><span class="notebook-structure-question">学生要学会什么</span></li>'+
+   '<li><span class="notebook-structure-number" aria-hidden="true">02</span><strong>课堂活动</strong><span class="notebook-structure-question">学生通过什么来学</span></li>'+
+   '<li><span class="notebook-structure-number" aria-hidden="true">03</span><strong>学习评价</strong><span class="notebook-structure-question">怎样判断学生学会了</span></li>'+
+   '</ol></section></div>';
+ }
+ const details=T().lessonBrief;
+ const [topic,subtitle]=lesson.title.split('：',2);
+ const duration=lesson.phases.reduce((total,phase)=>total+phase.minutes,0);
+ const longest=Math.max(...lesson.phases.map(phase=>phase.minutes));
  let minute=0;
- const rows=plan.phases.map(phase=>{
+ const rows=lesson.phases.map(phase=>{
   const start=String(minute).padStart(2,'0');
   minute+=phase.minutes;
   return '<li'+(phase.minutes===longest?' data-main':'')+'><span class="notebook-minute">'+start+'′</span>'+
    '<span>'+esc(phase.name)+'</span><span class="notebook-minute">'+phase.minutes+' 分钟</span></li>';
  }).join('');
- const track=plan.phases.map(phase=>'<span style="flex-grow:'+phase.minutes+'"'+(phase.minutes===longest?' data-main':'')+'></span>').join('');
+ const track=lesson.phases.map(phase=>'<span style="flex-grow:'+phase.minutes+'"'+(phase.minutes===longest?' data-main':'')+'></span>').join('');
  return '<div class="notebook-board"><section class="notebook-sheet" aria-labelledby="notebookLessonTitle">'+
-  '<div class="notebook-sheet-meta"><span>'+(lesson?'当前课案':'示例课案')+' · '+esc([details.grade,details.subject].filter(Boolean).join(' '))+'</span><span>'+duration+' 分钟</span></div>'+
+  '<div class="notebook-sheet-meta"><span>当前课案 · '+esc([details.grade,details.subject].filter(Boolean).join(' '))+'</span><span>'+duration+' 分钟</span></div>'+
   '<h2 id="notebookLessonTitle">'+esc(topic)+'</h2><p>'+esc(subtitle||'课堂流程')+'</p>'+
   '<div class="notebook-track" aria-hidden="true">'+track+'</div><ol class="notebook-phases" aria-label="课堂流程">'+rows+'</ol>'+
-  (plan.phases.length>3?'<p class="notebook-mobile-note">前三个环节 · 完整流程见教案</p>':'')+'</section></div>';
+  (lesson.phases.length>3?'<p class="notebook-mobile-note">前三个环节 · 完整流程见教案</p>':'')+'</section></div>';
 }
 home=function(){
  const {brief}=T(),lesson=lessonForBrief(),job=jobForBrief();
