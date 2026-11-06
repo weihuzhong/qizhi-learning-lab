@@ -25,6 +25,7 @@ const origin = new URL(process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + 
 const apiRoute = /^\/api\/(?:status$|chat$|lesson(?:\/|$)|cloud\/|deck\/|ppt\/)/;
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
+  ['/design-preview', ['design-preview.html', 'text/html; charset=utf-8']],
   ['/vendor/pptx.js', ['vendor/pptx.js', 'text/javascript; charset=utf-8']],
   ['/vendor/docx.js', ['vendor/docx.js', 'text/javascript; charset=utf-8']],
   ['/vendor/zip.js', ['vendor/zip.js', 'text/javascript; charset=utf-8']],
@@ -141,7 +142,7 @@ createServer(async (req, res) => {
     res.writeHead(200, {
       'content-type': asset[1],
       'content-length': asset[0].length,
-      'cache-control': url.pathname === '/' ? 'no-cache' : 'public, max-age=300',
+      'cache-control': asset[1].startsWith('text/html') ? 'no-cache' : 'public, max-age=300',
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'same-origin',
       'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",

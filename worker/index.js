@@ -4,7 +4,8 @@ import {modelOptions,modelError} from './model-provider.js';
 import {vendorAssets} from './assets.js';
 import {appearanceBoot} from './appearance.js';
 import {appearanceStyles} from './appearance-styles.js';
-import {teachingClient,teachingStyles} from './teaching.js';
+import {createTeachingClient,teachingClient,teachingStyles} from './teaching.js';
+import {notebookClient,notebookStyles} from './notebook-preview.js';
 import {teachingApi} from './teaching-api.js';
 const modes = {
  diagnose: '学习误区诊断：先询问学生思路，区分概念、建模和计算错误；一次只给一层提示，再提供变式题验证。',
@@ -40,8 +41,13 @@ export default {async fetch(request,env){
    const data=await upstream.json(),answer=data.choices?.[0]?.message?.content;if(typeof answer!=='string'||!answer.trim())return json({error:'模型未返回有效文本'},502);return json({answer});
   }catch{return json({error:'模型请求未完成，请稍后重试。'},502)}
  }
- if(url.pathname!=='/')return new Response('Not found',{status:404});
- return new Response(page.replace('<meta charset="utf-8">',()=>'<meta charset="utf-8">'+appearanceBoot).replace('</head>',()=>teachingStyles+appearanceStyles+'</head>').replace('</body>',()=>'<script src="/vendor/pptx.js"></script><script src="/vendor/docx.js"></script><script src="/vendor/zip.js"></script><script>'+teachingClient+'</script></body>'),{headers:{'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','referrer-policy':'same-origin','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://chatgpt.com"}});
+ const preview=url.pathname==='/design-preview';
+ if(url.pathname!=='/'&&!preview)return new Response('Not found',{status:404});
+ const markup=preview?page.replaceAll("'qizhi-v1'","'qizhi-notebook-preview-v1'"):page;
+ const boot=preview?appearanceBoot.replace("'qizhi-appearance-v1'","'qizhi-notebook-appearance-v1'"):appearanceBoot;
+ const styles=teachingStyles+appearanceStyles+(preview?'<meta name="robots" content="noindex">'+notebookStyles:'');
+ const client=preview?createTeachingClient(notebookClient):teachingClient;
+ return new Response(markup.replace('<meta charset="utf-8">',()=>'<meta charset="utf-8">'+boot).replace('</head>',()=>styles+'</head>').replace('</body>',()=>'<script src="/vendor/pptx.js"></script><script src="/vendor/docx.js"></script><script src="/vendor/zip.js"></script><script>'+client+'</script></body>'),{headers:{'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','referrer-policy':'same-origin','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://chatgpt.com"}});
 }};
 const page = String.raw`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>启知未来 · 协同备课工作台</title><style>
 :root{
