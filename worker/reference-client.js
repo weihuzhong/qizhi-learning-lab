@@ -41,10 +41,7 @@ prepForm = function() {
 };
 const referenceSlides = slidesHtml;
 slidesHtml = function() {
- return referenceSlides().replace(
-  '<div class="s2-toolbar"><button class="btn primary" id="pptOnlineCreate"',
-  ()=>referencePanel('ppt')+'<div class="s2-toolbar"><button class="btn primary" id="pptOnlineCreate"'
- );
+ return referenceSlides().replace('<!-- ppt-reference -->',()=>referencePanel('ppt'));
 };
 function bindReferences(kind) {
  const input = $('ref-'+kind);
