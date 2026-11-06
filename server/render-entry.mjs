@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { assertLessonTopic, lessonGenerationRoute, prepareLessonRequest } from '../worker/lesson-topic.js';
 
 const backend = 'https://qizhi-wuhaozhe.netlify.app';
 const pptRunner = 'https://qizhi-pptmaster.onrender.com';
@@ -57,7 +58,7 @@ async function forwardApi(req, res, url) {
     .map(part => part.trim()).filter(part => /^qizhi_session=[a-f0-9]{64}$/.test(part) ||
       (url.pathname.startsWith('/api/ppt/') && /^qizhi_ppt_visitor=[a-f0-9]{64}$/.test(part)));
   if (session?.length) headers.set('cookie', session.join('; '));
-  let body;
+  let body, lessonRequest;
   if (req.method === 'POST') {
     if (req.headers.origin !== origin) return json(res, 403, { error: '来源不匹配' });
     headers.set('origin', overflowJob ? origin : backend);
@@ -73,6 +74,16 @@ async function forwardApi(req, res, url) {
       chunks.push(chunk);
     }
     body = Buffer.concat(chunks, size);
+    if (lessonGenerationRoute.test(url.pathname)) {
+      try {
+        lessonRequest = prepareLessonRequest(JSON.parse(body));
+        if (lessonRequest.outline) assertLessonTopic(lessonRequest.outline, lessonRequest.brief);
+        if (lessonRequest.previous) assertLessonTopic(lessonRequest.previous, lessonRequest.brief);
+        body = JSON.stringify(lessonRequest);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof SyntaxError ? '备课请求格式无效' : error.message });
+      }
+    }
   }
 
   if (url.pathname === '/api/ppt/config' && session?.some(cookie => cookie.startsWith('qizhi_session='))) warmPptRunner();
@@ -91,6 +102,17 @@ async function forwardApi(req, res, url) {
   }
   if (response.status >= 300 && response.status < 400) {
     return json(res, 502, { error: '后端暂不可用，请稍后重试' });
+  }
+  if (response.ok && lessonRequest) {
+    const data = await response.json();
+    try {
+      assertLessonTopic(data.lesson ?? data.result, lessonRequest.brief, {
+        checkTitle: url.pathname === '/api/lesson' || url.pathname === '/api/lesson/outline',
+      });
+    } catch (error) {
+      return json(res, 502, { error: error.message });
+    }
+    return json(res, response.status, data);
   }
   if (response.ok && req.method === 'POST' &&
       (url.pathname === '/api/ppt/jobs' || /^\/api\/ppt\/jobs\/[a-f0-9]{32}\/wake$/.test(url.pathname))) warmPptRunner();

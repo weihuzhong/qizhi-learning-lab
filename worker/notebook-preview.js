@@ -196,26 +196,32 @@ function notebookEntry([route,icon,title,detail]){
  return '<button class="notebook-entry" data-teachgo="'+route+'">'+uiIcon(icon)+
   '<span><strong>'+title+'</strong><small>'+detail+'</small></span>'+uiIcon('arrow')+'</button>';
 }
-function notebookLessonSheet(){
- const [topic,subtitle]=sample.title.split('：',2);
- const duration=sample.phases.reduce((total,phase)=>total+phase.minutes,0);
- const longest=Math.max(...sample.phases.map(phase=>phase.minutes));
+function notebookLessonSheet(lesson,brief){
+ if(!lesson&&brief.topic?.trim()){
+  return '<div class="notebook-board"><section class="notebook-sheet"><div class="notebook-sheet-meta">当前课题</div><h2>'+
+   esc(brief.topic)+'</h2><p>生成并确认大纲后，这里会显示本课的课堂流程。</p></section></div>';
+ }
+ const plan=lesson||sample;
+ const details=lesson?T().lessonBrief:exampleBrief;
+ const [topic,subtitle]=plan.title.split('：',2);
+ const duration=plan.phases.reduce((total,phase)=>total+phase.minutes,0);
+ const longest=Math.max(...plan.phases.map(phase=>phase.minutes));
  let minute=0;
- const rows=sample.phases.map(phase=>{
+ const rows=plan.phases.map(phase=>{
   const start=String(minute).padStart(2,'0');
   minute+=phase.minutes;
   return '<li'+(phase.minutes===longest?' data-main':'')+'><span class="notebook-minute">'+start+'′</span>'+
    '<span>'+esc(phase.name)+'</span><span class="notebook-minute">'+phase.minutes+' 分钟</span></li>';
  }).join('');
- const track=sample.phases.map(phase=>'<span style="flex-grow:'+phase.minutes+'"'+(phase.minutes===longest?' data-main':'')+'></span>').join('');
+ const track=plan.phases.map(phase=>'<span style="flex-grow:'+phase.minutes+'"'+(phase.minutes===longest?' data-main':'')+'></span>').join('');
  return '<div class="notebook-board"><section class="notebook-sheet" aria-labelledby="notebookLessonTitle">'+
-  '<div class="notebook-sheet-meta"><span>示例课案 · 小学科学</span><span>'+duration+' 分钟</span></div>'+
+  '<div class="notebook-sheet-meta"><span>'+(lesson?'当前课案':'示例课案')+' · '+esc([details.grade,details.subject].filter(Boolean).join(' '))+'</span><span>'+duration+' 分钟</span></div>'+
   '<h2 id="notebookLessonTitle">'+esc(topic)+'</h2><p>'+esc(subtitle||'课堂流程')+'</p>'+
-  '<div class="notebook-track" aria-hidden="true">'+track+'</div><ol class="notebook-phases" aria-label="示例课案的课堂流程">'+rows+'</ol>'+
-  '<p class="notebook-mobile-note">前三个环节 · 完整流程见示例教案</p></section></div>';
+  '<div class="notebook-track" aria-hidden="true">'+track+'</div><ol class="notebook-phases" aria-label="课堂流程">'+rows+'</ol>'+
+  (plan.phases.length>3?'<p class="notebook-mobile-note">前三个环节 · 完整流程见教案</p>':'')+'</section></div>';
 }
 home=function(){
- const {lesson,job}=T();
+ const {brief}=T(),lesson=lessonForBrief(),job=jobForBrief();
  const resumeTitle=lesson?.title||(!job?.complete?job?.brief?.topic:'');
  const date=new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long',timeZone:'Asia/Shanghai'}).format(new Date());
  const resume=resumeTitle?'<section class="notebook-resume"><div><small>'+(lesson?'本机教案':'尚未完成的备课')+'</small><h3>'+esc(resumeTitle)+'</h3></div><button class="btn" data-teachgo="prep">继续备课</button></section>':'';
@@ -225,7 +231,7 @@ home=function(){
   '<p>为教师和支教团队写教案、安排课堂活动，制作可编辑的 PPT。</p>'+
   '<div class="notebook-actions"><button class="btn primary" id="startStudio">开始备课 '+uiIcon('arrow')+'</button>'+
   '<button class="btn" id="judgeDemo">免登录体验示例</button></div>'+
-  '<small>使用 AI 生成教案或课件时，需绑定个人 DeepSeek 密钥。</small></div>'+notebookLessonSheet()+'</section>'+
+  '<small>使用 AI 生成教案或课件时，需绑定个人 DeepSeek 密钥。</small></div>'+notebookLessonSheet(lesson,brief)+'</section>'+
   '<div class="notebook-heading"><h2>备课入口</h2><span>教案、模板、分工</span></div>'+
   '<div class="notebook-entries">'+notebookEntries.map(notebookEntry).join('')+'</div>'+resume+
   '<div class="notebook-heading"><h2>协作与设置</h2></div>'+

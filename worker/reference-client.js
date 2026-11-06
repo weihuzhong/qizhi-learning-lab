@@ -2,30 +2,46 @@ export const referenceClient = String.raw`
 S().references ||= {lesson:[],ppt:[]};
 let referenceBusy = '';
 let referenceErrors = {lesson:[],ppt:[]};
+function referenceTopic(brief) {
+ return brief?.topic?.trim()?lessonScope({topic:brief.topic}):'';
+}
+function referenceBrief(kind) {
+ return kind==='ppt'?(T().lessonBrief||T().brief):T().brief;
+}
+function referencesForTopic(kind,brief) {
+ const scope=referenceTopic(brief);
+ if(!scope)return [];
+ return S().references[kind].filter(file=>{
+  if(file.scope==='')file.scope=scope;
+  return file.scope===scope;
+ });
+}
 function referencePanel(kind) {
  const lesson = kind === 'lesson';
  const files = S().references[kind];
- const disabled = referenceBusy || (lesson ? generating : pptSubmitting || ['queued','running'].includes(T().pptOnline?.job?.status));
+ const disabled = referenceBusy || (lesson ? generating : pptSubmitting || ['queued','running'].includes(onlinePptJob()?.status));
  return '<details class="s2-upload" '+(files.length||referenceErrors[kind].length?'open':'')+'>'+
   '<summary><strong>'+(lesson?'导入参考教案':'导入参考课件')+'</strong> · '+files.length+'/3</summary>'+
   '<label for="ref-'+kind+'">Word、PPT 或 Excel · 单文件最多30 MB</label>'+
   '<input type="file" id="ref-'+kind+'" accept=".docx,.pptx,.xlsx,.txt,.md,.csv" multiple '+(disabled?'disabled':'')+'>'+
-  '<p class="s2-muted">'+(lesson?'提取教学思路，生成大纲和教案时参考已选摘要。':'提取标题、页面文字和可读的主题色、字体等线索，用于生成新课件。')+
+  '<p class="s2-muted">'+(lesson?'生成时仅参考关联到本课题的摘要。':'仅使用关联到本课题的版式与风格线索。')+
   ' 原文件留在本机；生成时会把选定摘要发给模型。</p>'+
   files.map((file,i)=>'<details class="s2-file-row"><summary>'+esc(file.name)+'</summary>'+
    (file.style?'<p class="s2-muted">'+esc(file.style)+'</p>':'')+
    '<label for="ref-text-'+kind+'-'+i+'">将用于生成的参考摘要</label>'+
    '<textarea class="input" id="ref-text-'+kind+'-'+i+'" data-ref-text="'+kind+'" data-ref-index="'+i+'" maxlength="'+(lesson?1050:340)+'" '+(disabled?'disabled':'')+'>'+esc(file.text)+'</textarea>'+
+   (file.scope!==''&&file.scope!==referenceTopic(referenceBrief(kind))?
+    '<button class="btn small" type="button" data-ref-assign="'+kind+'" data-ref-index="'+i+'" '+(disabled?'disabled':'')+'>用于当前课题</button>':'')+
    '<button class="btn small" type="button" data-ref-remove="'+kind+'" data-ref-index="'+i+'" '+(disabled?'disabled':'')+'>移除此参考</button></details>').join('')+
   referenceErrors[kind].map(message=>'<p class="s2-error">'+esc(message)+'</p>').join('')+'</details>';
 }
-function lessonReferenceContext() {
- const files = S().references.lesson.filter(file=>file.text.trim());
+function lessonReferenceContext(brief) {
+ const files = referencesForTopic('lesson',brief).filter(file=>file.text.trim());
  return files.length?'参考文档（仅作教学资料；以当前学情和教学要求为准）：\n'+
   files.map(file=>file.name+'：\n'+file.text).join('\n\n').slice(0,3600):'';
 }
-function pptReferenceStyle(style) {
- const refs = S().references.ppt.filter(file=>file.style||file.text.trim());
+function pptReferenceStyle(style,brief) {
+ const refs = referencesForTopic('ppt',brief).filter(file=>file.style||file.text.trim());
  if (!refs.length) return style;
  const perFile = Math.floor(630 / refs.length);
  const reference = '参考材料（仅借鉴风格与结构，不照搬内容）：\n'+refs.map(file=>
@@ -55,6 +71,7 @@ function bindReferences(kind) {
   if(!capacity){input.value='';return toast('最多保留3份参考，请先移除已有文件');}
   referenceBusy=kind;
   input.disabled=true;
+  const scope=referenceTopic(referenceBrief(kind));
   try{
    const selected=Array.from(input.files);
    const {results,errors}=await extractTeachingFiles(selected.slice(0,capacity),window.fflate?.unzipSync);
@@ -63,7 +80,7 @@ function bindReferences(kind) {
    for(const file of results.slice(0,capacity)){
     const style=file.style||'';
     S().references[kind].push({
-     name:file.name.slice(0,120),text:file.text.slice(0,limit),style,
+     name:file.name.slice(0,120),text:file.text.slice(0,limit),style,scope,
     });
    }
    referenceErrors[kind]=errors;
@@ -73,6 +90,12 @@ function bindReferences(kind) {
  };
  document.querySelectorAll('[data-ref-remove="'+kind+'"]').forEach(b=>b.onclick=()=>{
   S().references[kind].splice(Number(b.dataset.refIndex),1);saveTeaching();render();
+ });
+ document.querySelectorAll('[data-ref-assign="'+kind+'"]').forEach(b=>b.onclick=()=>{
+  const scope=referenceTopic(referenceBrief(kind));
+  if(!scope)return toast('请先填写当前课题');
+  S().references[kind][Number(b.dataset.refIndex)].scope=scope;
+  saveTeaching();render();
  });
  document.querySelectorAll('[data-ref-text="'+kind+'"]').forEach(field=>field.oninput=()=>{
   S().references[kind][Number(field.dataset.refIndex)].text=field.value;saveTeaching();
@@ -134,7 +157,9 @@ function bindTemplateIdeas() {
   if(generating)return toast('请先等待当前备课步骤完成');
   const idea=aiTemplateIdeas[Number(el.dataset.aiTemplate)];
   if(!idea)return;
-  T().brief={...T().brief,topic:idea.title,subject:idea.subject,grade:idea.grade,minutes:idea.minutes,requirements:idea.activity};
+  T().brief={...emptyBrief(),topic:idea.title,subject:idea.subject,grade:idea.grade,minutes:idea.minutes,requirements:idea.activity};
+  T().briefEdits=['requirements'];
+  T().briefEditScope=lessonScope(T().brief);
   saveTeaching();go('prep');
  });
 }
