@@ -47,6 +47,7 @@ function bodyLimit(path) {
 }
 
 async function forwardApi(req, res, url) {
+  const overflowJob = /^\/api\/ppt\/jobs\/r-[a-f0-9]{32}(?:\/(?:cancel|wake|file\/(?:deck\.pptx|page-\d{2}\.png|audit\.json)))?$/.test(url.pathname);
   const headers = new Headers();
   for (const name of ['content-type', 'accept']) {
     if (typeof req.headers[name] === 'string') headers.set(name, req.headers[name]);
@@ -58,7 +59,7 @@ async function forwardApi(req, res, url) {
   let body;
   if (req.method === 'POST') {
     if (req.headers.origin !== origin) return json(res, 403, { error: '来源不匹配' });
-    headers.set('origin', backend);
+    headers.set('origin', overflowJob ? origin : backend);
     const limit = bodyLimit(url.pathname);
     const chunks = [];
     let size = 0;
@@ -75,9 +76,18 @@ async function forwardApi(req, res, url) {
 
   if (url.pathname === '/api/ppt/config' && session?.some(cookie => cookie.startsWith('qizhi_session='))) warmPptRunner();
   const draftFile = req.method === 'GET' && /^\/api\/ppt\/drafts\/[a-f0-9]{32}\/(?:deck\.pptx|page-\d{2}\.png|audit\.json)$/.test(url.pathname);
-  const response = await fetch((draftFile ? pptRunner : backend) + url.pathname + url.search, {
+  let response = await fetch((draftFile || overflowJob ? pptRunner : backend) + url.pathname + url.search, {
     method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(90000),
   });
+  if (req.method === 'POST' && url.pathname === '/api/ppt/jobs' && response.status === 429) {
+    const oldLimit = await response.clone().json().catch(() => null);
+    if (oldLimit?.error === '任务较多，请稍后再试') {
+      headers.set('origin', origin);
+      response = await fetch(pptRunner + '/api/ppt/overflow/jobs', {
+        method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(90000),
+      });
+    }
+  }
   if (response.status >= 300 && response.status < 400) {
     return json(res, 502, { error: '后端暂不可用，请稍后重试' });
   }
@@ -102,7 +112,7 @@ async function forwardApi(req, res, url) {
     }
     return json(res, response.status, data);
   }
-  const output = { 'cache-control': draftFile ? 'private, no-store' : 'no-store', 'x-content-type-options': 'nosniff' };
+  const output = { 'cache-control': draftFile || overflowJob ? 'private, no-store' : 'no-store', 'x-content-type-options': 'nosniff' };
   for (const name of ['content-type', 'content-disposition']) {
     const value = response.headers.get(name);
     if (value) output[name] = value;

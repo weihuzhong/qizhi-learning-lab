@@ -3,7 +3,7 @@ let pptServiceConfig=null,pptSubmitting=false,pptOnlineError='',pptPollTimer=nul
 const pptPhases={queued:'等待后台接单',running:'制作中',preparing:'加载PPTMaster',designing:'设计页面',checking:'整稿检查',exporting:'导出PPTX',rendering:'渲染预览',complete:'整稿完成',draft:'待复核初稿',failed:'制作未完成',cancelled:'已停止'};
 function onlinePptJob(){return T().pptOnline?.job||null;}
 function onlinePptFile(id,name){
- const prefix=onlinePptJob()?.result?.delivery==='temporary'?'/api/ppt/drafts/':'/api/ppt/jobs/';
+ const prefix=onlinePptJob()?.result?.delivery==='temporary'&&!id.startsWith('r-')?'/api/ppt/drafts/':'/api/ppt/jobs/';
  return prefix+encodeURIComponent(id)+(prefix.endsWith('jobs/')?'/file/':'/')+encodeURIComponent(name);
 }
 function pptReviewHtml(job){
