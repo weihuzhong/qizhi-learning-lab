@@ -1,5 +1,5 @@
 import http from 'node:http';
-import {readFile,writeFile,readdir,mkdir,mkdtemp,rm,cp} from 'node:fs/promises';
+import {readFile,writeFile,readdir,mkdir,mkdtemp,rm,cp,copyFile,rename,stat} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {spawn} from 'node:child_process';
@@ -9,7 +9,10 @@ const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const RUNNER_REVISION='quick-page-recovery-1';
+const RUNNER_REVISION='quick-draft-delivery-1';
+const draftDirectory=path.join(os.tmpdir(),'qizhi-ppt-drafts');
+const draftLifetime=24*60*60*1000;
+const draftMarker='初稿已生成，请从参赛网站下载并查看逐页复核建议。';
 const pageNumber=number=>String(number).padStart(2,'0');
 const pageFile=number=>pageNumber(number)+'_slide.svg';
 
@@ -37,6 +40,69 @@ async function api(route,body){
    if(terminal||attempt===attempts-1)throw error;
    await new Promise(resolve=>setTimeout(resolve,attempt===0?300:900));
   }
+ }
+}
+
+async function supportsDurableDrafts(){
+ try{
+  const response=await fetch(BASE+'/api/ppt/config',{signal:AbortSignal.timeout(6000)});
+  return response.ok&&(await response.json()).draftDelivery===true;
+ }catch{return false;}
+}
+
+async function saveTemporaryDraft(auth,result,deliverables){
+ await mkdir(draftDirectory,{recursive:true,mode:0o700});
+ const entries=await Promise.all((await readdir(draftDirectory)).filter(name=>/^[a-f0-9]{32}$/.test(name)).map(async name=>{
+  const file=path.join(draftDirectory,name);
+  return {file,mtime:(await stat(file).catch(()=>null))?.mtimeMs||0};
+ }));
+ entries.sort((a,b)=>b.mtime-a.mtime);
+ await Promise.all(entries.filter((entry,index)=>index>=23||Date.now()-entry.mtime>draftLifetime)
+  .map(entry=>rm(entry.file,{recursive:true,force:true})));
+ const staging=await mkdtemp(path.join(draftDirectory,'incoming-'));
+ const destination=path.join(draftDirectory,auth.id);
+ try{
+  await Promise.all(deliverables.map(([name,file])=>copyFile(file,path.join(staging,name))));
+  await writeFile(path.join(staging,'draft.json'),JSON.stringify({result,expiresAt:Date.now()+draftLifetime}));
+  await rename(staging,destination);
+  try{await api('fail',{...auth,error:draftMarker});}
+  catch(error){await rm(destination,{recursive:true,force:true});throw error;}
+ }finally{await rm(staging,{recursive:true,force:true});}
+}
+
+async function serveTemporaryDraft(req,res,match){
+ const [,id,filename='draft.json']=match;
+ const headers={'cache-control':'private, no-store','x-content-type-options':'nosniff'};
+ const respond=(status,message)=>{
+  res.writeHead(status,{...headers,'content-type':'application/json; charset=utf-8'});
+  res.end(JSON.stringify({error:message}));
+ };
+ const cookie=(req.headers.cookie||'').split(';').map(part=>part.trim())
+  .filter(part=>/^qizhi_(?:session|ppt_visitor)=[a-f0-9]{64}$/.test(part));
+ if(cookie.length!==2)return respond(403,'请在创建课件的浏览器登录后下载');
+ try{
+  const owner=await fetch(BASE+'/api/ppt/jobs/'+id,{
+   headers:{cookie:cookie.join('; ')},redirect:'error',signal:AbortSignal.timeout(9000),
+  });
+  if(!owner.ok)return respond(owner.status===404?404:owner.status<500?403:502,'暂时无法验证课件访问权限');
+  const {job}=await owner.json();
+  if(job?.id!==id||job.status!=='failed'||job.error!==draftMarker)return respond(404,'该任务没有可下载的临时初稿');
+  const directory=path.join(draftDirectory,id);
+  const draft=JSON.parse(await readFile(path.join(directory,'draft.json'),'utf8'));
+  if(draft.expiresAt<=Date.now())return respond(410,'临时初稿已过期');
+  if(filename==='draft.json'){
+   res.writeHead(200,{...headers,'content-type':'application/json; charset=utf-8'});
+   return res.end(JSON.stringify(draft));
+  }
+  const bytes=await readFile(path.join(directory,filename));
+  const type=filename==='deck.pptx'?'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+   filename.endsWith('.png')?'image/png':'application/json; charset=utf-8';
+  if(filename==='deck.pptx')headers['content-disposition']="attachment; filename*=UTF-8''"+
+   encodeURIComponent(job.title+'_待复核初稿.pptx');
+  res.writeHead(200,{...headers,'content-type':type,'content-length':bytes.length});
+  return res.end(bytes);
+ }catch(error){
+  return respond(error.code==='ENOENT'?410:502,error.code==='ENOENT'?'临时初稿已过期或后台已重启':'暂时无法读取初稿');
  }
 }
 
@@ -314,73 +380,101 @@ async function executeJob(job){
 
   const pptx=path.join(project,'deck.pptx');
   const orderedDrafts=()=>[...drafts.values()].sort((a,b)=>a.number-b.number);
-  let contentReview,result,rescuePages=4;
-  for(let round=0;round<2;round++){
-   await progress('checking','正在检查整稿版式和可编辑性');
-   let issues=await normalizeLayout(await checkQuality());
-   if(issues.length){
-    await repair(issues,'版式检查',layoutRepair);
+  await progress('checking','正在检查整稿版式和可编辑性');
+  let issues=await normalizeLayout(await checkQuality());
+  if(issues.length){
+   await repair(issues,'版式检查',layoutRepair);
+   issues=await normalizeLayout(await checkQuality());
+  }
+  if(issues.length){
+   const numbers=[...new Set(issues.map(issue=>issue.slide))];
+   if(numbers.length<=4){
+    await progress('checking','正在逐页重排 '+numbers.join('、')+'，其余页面已保留');
+    for(const number of numbers){
+     await author([number],issues.filter(issue=>issue.slide===number),false,compactLayoutRepair);
+    }
     issues=await normalizeLayout(await checkQuality());
    }
-   if(issues.length){
-    const numbers=[...new Set(issues.map(issue=>issue.slide))];
-    if(numbers.length<=rescuePages){
-     rescuePages-=numbers.length;
-     await progress('checking','正在逐页重排 '+numbers.join('、')+'，其余页面已保留');
-     for(const number of numbers){
-      await author([number],issues.filter(issue=>issue.slide===number),false,compactLayoutRepair);
-     }
-     issues=await normalizeLayout(await checkQuality());
-    }
-    if(issues.length)throw Error('第 '+[...new Set(issues.map(issue=>issue.slide))].join('、')+' 页的版式无法自动修复。教案已保留，可重新制作');
-   }
-   await progress('exporting','正在导出可编辑 PPTX');
-   const notesDir=path.join(project,'notes');
-   await mkdir(notesDir,{recursive:true});
-   const notes=orderedDrafts().map(page=>'# '+path.parse(pageFile(page.number)).name+'\n\n'+page.notes).join('\n\n---\n\n');
-   await writeFile(path.join(notesDir,'total.md'),notes+'\n','utf8');
-   await run('total_md_split.py',[project],'教师备注整理失败');
-   await run('svg_to_pptx.py',[project,'--quick-generate','--with-notes','-o',pptx],'PPTMaster导出失败，请重新提交制作');
-   const verifyArgs=[project,pptx,String(job.count),SKILL];
-   const check=await run('verify-render.py',[...verifyArgs,'--text-only'],'成稿页数或教师备注核验失败');
-   result=JSON.parse(check.stdout);
-
-   await progress('checking','正在核对教学步骤、课堂时间和实验条件');
-   const slides=result.pages.map((page,i)=>({number:i+1,text:page.text}));
-   for(let attempt=0;attempt<2;attempt++){
-    try{
-     reviewTurns++;
-     contentReview=await api('review',{...auth,slides});
-     break;
-    }catch(error){
-     if(!canRetry(error)||attempt||reviewTurns>=3)throw error;
-    }
-   }
-   if(contentReview.passed)break;
-   if(round||reviewTurns>=3)throw Error('第 '+[...new Set(contentReview.issues.map(issue=>issue.slide))].join('、')+' 页仍有教学内容矛盾，请核对教案后重试');
-   await repair(contentReview.issues,'教学复核');
+   if(issues.length)throw Error('第 '+[...new Set(issues.map(issue=>issue.slide))].join('、')+' 页的版式无法通过技术校验，暂无法导出完整PPTX。教案已保留');
   }
 
-  await progress('rendering','课件已通过检查，正在生成逐页预览');
-  const rendered=await run('verify-render.py',[project,pptx,String(job.count),SKILL],'成稿预览生成失败');
-  result=JSON.parse(rendered.stdout);
-  const summary='已完成 '+result.count+' 页可编辑课件，含逐页预览与教师备注。';
-  const audit={contentReview,engine:'ppt-master',sourceCommit:COMMIT,model:'DeepSeek',
+  const notesDir=path.join(project,'notes');
+  await mkdir(notesDir,{recursive:true});
+  async function exportDeck(destination,reviewIssues=[]){
+   const notes=orderedDrafts().map(page=>{
+    const advice=reviewIssues.filter(issue=>issue.slide===page.number).map(issue=>
+     '待核对：'+issue.reason.replace(/\s+/g,' ')+'\n建议：'+issue.correction.replace(/\s+/g,' '));
+    return ['# '+path.parse(pageFile(page.number)).name,page.notes,...advice].join('\n\n');
+   }).join('\n\n---\n\n');
+   await writeFile(path.join(notesDir,'total.md'),notes+'\n','utf8');
+   await run('total_md_split.py',[project],'教师备注整理失败');
+   await run('svg_to_pptx.py',[project,'--quick-generate','--with-notes','-o',destination],'PPTMaster导出失败，请重新提交制作');
+  }
+  await progress('exporting','正在导出可编辑 PPTX');
+  await exportDeck(pptx);
+  const verifyArgs=[project,pptx,String(job.count),SKILL];
+  const check=await run('verify-render.py',[...verifyArgs,'--text-only'],'成稿页数或教师备注核验失败');
+  const checked=JSON.parse(check.stdout);
+
+  await progress('checking','PPT 已导出，正在整理逐页复核建议');
+  const slides=checked.pages.map((page,i)=>({number:i+1,text:page.text}));
+  let contentReview=null;
+  for(let attempt=0;attempt<2;attempt++){
+   try{
+    reviewTurns++;
+    contentReview=await api('review',{...auth,slides});
+    break;
+   }catch(error){
+    if(error.status===409)throw error;
+    if(canRetry(error)&&!attempt)continue;
+    console.warn('PPTMaster review unavailable:',job.id,error.status||error.name);
+    break;
+   }
+  }
+  const review={status:contentReview?.passed?'passed':contentReview?'flagged':'unavailable',
+   issues:contentReview?.issues||[]};
+  const isDraft=review.status!=='passed';
+  if(review.issues.length){
+   const annotated=path.join(project,'deck-annotated.pptx');
+   try{
+    await exportDeck(annotated,review.issues);
+    await run('verify-render.py',[project,annotated,String(job.count),SKILL,'--text-only'],'批注稿核验失败');
+    await rename(annotated,pptx);
+   }catch(error){
+    // The review remains visible alongside the already verified editable draft.
+    console.warn('PPTMaster could not add speaker-note annotations:',job.id,error.name);
+   }
+  }
+
+  await progress('rendering',isDraft?'正在准备初稿预览和复核建议':'课件已通过检查，正在生成逐页预览');
+  const rendered=await run('verify-render.py',verifyArgs,'成稿预览生成失败');
+  const result=JSON.parse(rendered.stdout);
+  const summary=isDraft?'已生成 '+result.count+' 页可编辑初稿。'+
+   (review.status==='flagged'?'请按逐页建议核对后使用。':'内容复核暂未完成，请人工核对。'):
+   '已完成 '+result.count+' 页可编辑课件，含逐页预览与教师备注。';
+  const audit={contentReview,review,engine:'ppt-master',sourceCommit:COMMIT,model:'DeepSeek',
    actualCount:result.count,commands:calls,summary,elapsedSeconds:Math.round((Date.now()-start)/1000),
    queueSeconds:Math.max(0,Math.round((start-(job.createdAt||start))/1000)),modelTurns,reviewTurns,runnerRevision:RUNNER_REVISION};
-  const deliverables=[['deck.pptx',pptx],...result.pages.map((page,i)=>['page-'+pageNumber(i+1)+'.png',page.preview])];
-  const upload=async([name,file])=>{
-   const bytes=await readFile(file);
-   if(bytes.length>3500000)throw Error('导出文件超过3.5MB交付限制');
-   const receipt=await api('upload',{...auth,name,data:bytes.toString('base64')});
-   if(receipt.sha256!==createHash('sha256').update(bytes).digest('hex'))throw Error('交付校验失败');
-  };
-  for(let i=0;i<deliverables.length;i+=2)await Promise.all(deliverables.slice(i,i+2).map(upload));
-  await api('upload',{...auth,name:'audit.json',data:Buffer.from(JSON.stringify(audit,null,2)).toString('base64')});
-  await api('complete',{...auth,result:{engine:'ppt-master',sourceCommit:COMMIT,actualCount:result.count,
+  const published={engine:'ppt-master',sourceCommit:COMMIT,actualCount:result.count,
    pages:result.pages.map((page,i)=>({number:i+1,title:page.title,preview:'page-'+pageNumber(i+1)+'.png'})),
-   summary,elapsedSeconds:Math.round((Date.now()-start)/1000)}});
-  console.log('PPTMaster delivery:',job.id,JSON.stringify({modelTurns,reviewTurns,pages:result.count,elapsedSeconds:audit.elapsedSeconds}));
+   quality:isDraft?'draft':'final',review,summary,elapsedSeconds:audit.elapsedSeconds};
+  const auditFile=path.join(project,'audit.json');
+  await writeFile(auditFile,JSON.stringify(audit,null,2));
+  const deliverables=[['deck.pptx',pptx],['audit.json',auditFile],
+   ...result.pages.map((page,i)=>['page-'+pageNumber(i+1)+'.png',page.preview])];
+  if(isDraft&&!(await supportsDurableDrafts())){
+   await saveTemporaryDraft(auth,published,deliverables);
+  }else{
+   const upload=async([name,file])=>{
+    const bytes=await readFile(file);
+    if(bytes.length>3500000)throw Error('导出文件超过3.5MB交付限制');
+    const receipt=await api('upload',{...auth,name,data:bytes.toString('base64')});
+    if(receipt.sha256!==createHash('sha256').update(bytes).digest('hex'))throw Error('交付校验失败');
+   };
+   for(let i=0;i<deliverables.length;i+=2)await Promise.all(deliverables.slice(i,i+2).map(upload));
+   await api('complete',{...auth,result:published});
+  }
+  console.log('PPTMaster delivery:',job.id,JSON.stringify({modelTurns,reviewTurns,pages:result.count,quality:published.quality,elapsedSeconds:audit.elapsedSeconds}));
  }catch(error){
   const message=error.status||error instanceof PageOutputError||/[\u4e00-\u9fff]/.test(error.message)
    ?error.message:'后台制作暂时失败，请稍后重试';
@@ -398,5 +492,8 @@ async function drain(){if(busy){drainAgain=true;return;}busy=true;try{do{drainAg
 if(process.argv.includes('--once')){await drain();}
 else{
  const bootGuard=await command('python3',[path.join(SKILL,'scripts/attribution_guard.py')],{cwd:HERE});if(bootGuard.code!==0)throw Error('PPTMaster startup integrity check failed');const previewFont=await command('fc-match',['-f','%{family}','Microsoft YaHei'],{cwd:HERE});if(previewFont.code!==0||!previewFont.stdout.includes('Noto Sans CJK SC'))throw Error('Chinese preview font alias missing');let lastWake=0,wakeTimer=null;
- const server=http.createServer(async(req,res)=>{if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,revision:RUNNER_REVISION,integrity:true,busy,previewFont:previewFont.stdout.trim(),publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(busy){drainAgain=true;return;}const wait=Math.max(0,10000-(Date.now()-lastWake));if(wakeTimer)return;wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
+ const server=http.createServer(async(req,res)=>{
+  const draft=req.method==='GET'&&req.url?.match(/^\/api\/ppt\/drafts\/([a-f0-9]{32})(?:\/(deck\.pptx|page-\d{2}\.png|audit\.json))?$/);
+  if(draft)return serveTemporaryDraft(req,res,draft);
+  if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,revision:RUNNER_REVISION,integrity:true,busy,previewFont:previewFont.stdout.trim(),publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');if(busy){drainAgain=true;return;}const wait=Math.max(0,10000-(Date.now()-lastWake));if(wakeTimer)return;wakeTimer=setTimeout(()=>{wakeTimer=null;lastWake=Date.now();drain().catch(e=>console.error('Queue access failed:',e.message));},wait);return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
 }

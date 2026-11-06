@@ -32,6 +32,27 @@ test('model credentials stay server-side and cancellation invalidates worker wri
  try{const r=await call(api,'worker/model',{...auth,messages:[{role:'user',content:'lesson fixture'}],tools:[]},'',true);assert.equal(r.status,200);assert.equal(calls,1);assert(!JSON.stringify(r.data).includes('only-in-test-proxy'));}finally{globalThis.fetch=old;}
  assert.equal((await call(api,'jobs/'+id+'/cancel',{},a.cookie)).data.job.status,'cancelled');assert.equal((await call(api,'worker/progress',{...auth,phase:'designing'},'',true)).status,409);
 });
+test('a verified deck with content concerns is downloadable as a draft only by its owner',async()=>{
+ const api=createPptService(new Store(),{},{workerKey:keys.publicKey,runnerURL:"",billing:fixtureBilling()});
+ const a=await call(api,'jobs',source),id=a.data.job.id;
+ const claim=await call(api,'worker/claim',{},'',true),auth={id,runId:claim.data.job.runId};
+ const pages=Array.from({length:8},(_,i)=>({number:i+1,preview:'page-'+String(i+1).padStart(2,'0')+'.png'}));
+ const result={engine:'ppt-master',sourceCommit:'3c956467cd053fec36816cb7d2ca973729a5d4d1',actualCount:8,pages,quality:'draft'};
+ const issues=[{slide:5,reason:'步骤和实验条件有冲突',correction:'根据教案统一实验条件'}];
+ await reviewAs(api,auth,issues);
+ assert.equal((await call(api,'worker/complete',{...auth,result},'',true)).status,400);
+ for(const name of ['deck.pptx','audit.json',...pages.map(p=>p.preview)]){
+  await call(api,'worker/upload',{...auth,name,data:Buffer.from('fixture').toString('base64')},'',true);
+ }
+ assert.equal((await call(api,'worker/complete',{...auth,result:{...result,quality:'final'}},'',true)).status,409);
+ assert.equal((await call(api,'worker/complete',{...auth,result},'',true)).data.job.status,'draft');
+ const j=(await call(api,'jobs/'+id,undefined,a.cookie)).data.job;
+ assert.deepEqual(j.result.review,{status:'flagged',issues});
+ assert.equal((await call(api,'jobs/'+id+'/file/deck.pptx')).status,403);
+ const download=await api(new Request('https://qizhi.test/api/ppt/jobs/'+id+'/file/deck.pptx',{headers:{cookie:a.cookie}}));
+ assert.equal(download.status,200);assert.equal(await download.text(),'fixture');
+ assert.match(decodeURIComponent(download.headers.get('content-disposition')),/待复核初稿\.pptx/);
+});
 test('automatic frontend submits a background job and downloads originals without handoff',()=>{new Function(pptOnlineClient);assert(pptOnlineClient.includes("api('ppt/jobs'"));assert(pptOnlineClient.includes('直接生成整份 PPT'));assert(!pptOnlineClient.includes('pmCopy'));assert(!pptOnlineClient.includes('new window.PptxGenJS'));});
 
 test('completed history cannot push an older waiting task out of the queue',async()=>{const store=new Store(),api=createPptService(store,{},{workerKey:keys.publicKey,runnerURL:"",billing:fixtureBilling()});const oldest=await call(api,'jobs',source);const queue=[oldest.data.job.id];for(let n=0;n<90;n++){const id=n.toString(16).padStart(32,'0');queue.push(id);await store.setJSON('jobs/'+id,{id,status:'complete',expiresAt:Date.now()+100000});}await store.setJSON('queue',queue);const newer=await call(api,'jobs',source);assert.equal(newer.status,202);const claim=await call(api,'worker/claim',{},'',true);assert.equal(claim.data.job.id,oldest.data.job.id);assert.equal((await store.get('queue')).length,2);});
