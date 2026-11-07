@@ -27,8 +27,8 @@ function chunkBase64(blob){
   reader.readAsDataURL(blob);
  });
 }
-async function shareDocument(id,document,file){
- const body={id,name:document.name,text:document.text,report:document.report||null};
+async function shareDocument(id,document,file,lessonId){
+ const body={id,name:document.name,text:document.text,report:document.report||null,lessonId};
  if(originalFilesAvailable===false){
   if(file||!document.text?.trim())throw Error('目前只能分享已提取的文字');
   body.report ||= {topic:document.name.slice(0,160),summary:'从原文件提取文字，待组内审阅。',strengths:[],risks:[],nextSteps:[]};
@@ -73,6 +73,81 @@ async function sharedOriginal(team,document){
  if(result.size!==file.size)throw Error('下载不完整，请重试');
  return result;
 }
+function originalFileUrl(team,document,view){
+ return '/api/cloud/team/document/file?'+new URLSearchParams({team,document,view});
+}
+function originalActions(team,doc){
+ const name=doc.original.name;
+ const download='<a class="btn small" href="'+esc(originalFileUrl(team,doc.id,'download'))+'" download>下载原件</a>';
+ if(/\.(pdf|png|jpe?g)$/i.test(name)){
+  return '<a class="btn small primary" href="'+esc(originalFileUrl(team,doc.id,'preview'))+'" target="_blank" rel="noopener noreferrer">预览原件</a>'+download;
+ }
+ if(/\.(docx|pptx)$/i.test(name)){
+  return '<button class="btn small primary" data-preview-original="'+esc(doc.id)+'">预览原件</button>'+download;
+ }
+ return download;
+}
+function previewOffice(name,read){
+ const extension=name.split('.').at(-1).toLowerCase();
+ const dialog=document.createElement('dialog');
+ dialog.style.cssText='width:min(1120px,calc(100vw - 24px));max-width:none;padding:16px;border:1px solid #a4b6ae;border-radius:12px;background:#fbfaf5;color:#172d25';
+ dialog.setAttribute('aria-label','原件预览 '+name);
+ dialog.innerHTML='<div class="s2-toolbar"><strong data-preview-title></strong><button type="button" class="btn small" data-preview-close>关闭</button></div><p role="status">正在准备文件预览…</p>';
+ dialog.querySelector('[data-preview-title]').textContent=name;
+ const status=dialog.querySelector('[role=status]');
+ const frame=document.createElement('iframe');
+ frame.title='原件预览内容';
+ frame.setAttribute('sandbox','allow-scripts');
+ frame.style.cssText='display:block;visibility:hidden;width:100%;height:min(75vh,800px);border:0';
+ const request=new AbortController();
+ const timer=setTimeout(()=>fail('预览超时，请重试或下载原件'),90000);
+ function fail(message){
+  request.abort();
+  clearTimeout(timer);
+  status.textContent=message;
+  frame.remove();
+ }
+ let sent=false;
+ async function receive(event){
+  if(event.source!==frame.contentWindow||event.origin!=='null'||event.data?.type!=='qizhi-office-preview')return;
+  if(event.data.state==='ready'&&!sent){
+   sent=true;
+   try{
+    const bytes=await read(request.signal);
+    if(dialog.open&&!request.signal.aborted)frame.contentWindow.postMessage({type:'qizhi-office-file',extension,bytes},'*',[bytes]);
+   }catch(error){if(!request.signal.aborted)fail(error.message||'无法读取原件，请重试');}
+  }else if(event.data.state==='rendered'){
+   clearTimeout(timer);
+   status.textContent='浏览器预览，版式以下载原件为准。';
+   frame.style.visibility='visible';
+  }else if(event.data.state==='failed')fail('这份文件无法在浏览器中预览，请下载原件打开');
+ }
+ window.addEventListener('message',receive);
+ dialog.addEventListener('close',()=>{
+  request.abort();
+  clearTimeout(timer);
+  window.removeEventListener('message',receive);
+  dialog.remove();
+ },{once:true});
+ dialog.querySelector('[data-preview-close]').onclick=()=>dialog.close();
+ frame.src='/office-preview.html';
+ dialog.append(frame);
+ document.body.append(dialog);
+ dialog.showModal();
+}
+function bindOriginalPreviews(team){
+ document.querySelectorAll('[data-preview-original]').forEach(button=>button.onclick=()=>{
+  const doc=team.documents.find(d=>d.id===button.dataset.previewOriginal);
+  if(!doc?.original)return;
+  previewOffice(doc.original.name,async signal=>{
+   const response=await fetch(originalFileUrl(team.id,doc.id,'download'),{signal});
+   if(!response.ok)throw Error('无法读取原件，请刷新后重试');
+   const bytes=await response.arrayBuffer();
+   if(bytes.byteLength!==doc.original.size)throw Error('原件读取不完整，请重试');
+   return bytes;
+  });
+ });
+}
 async function saveLocalDocument(document,file){
  if(S().documents.length>=60)throw Error('本机最多保存60份文档，请先删除不需要的文件');
  const item={name:document.name,text:document.text,report:document.report||null,truncated:!!document.truncated};
@@ -98,7 +173,7 @@ function reportMarkup(r){
 }
 function extractedText(d){
  return d.text?'<details><summary>查看提取文字（'+d.text.length+'字）</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;font:inherit">'+esc(d.text)+'</pre></details>':
- '<p class="s2-muted">此文件没有可提取的正文，可下载原件查看。</p>';
+ '<p class="s2-muted">这条记录未保存提取文字，可以查看原件。</p>';
 }
 function reviewDesk(){
  const d=S().documents[documentIndex];
@@ -213,21 +288,18 @@ const docRender=render;render=function(){
  section.className='s2-card';
  section.innerHTML='<h3>共享文档与教研分析 · '+(team.documents||[]).length+'</h3>'+
  (originalFilesAvailable===false?'<p class="s2-muted">当前可分享和导入提取文字。原件共享与共享文档删除暂未开放。</p>':'')+
- (team.documents||[]).map(d=>{
-  const url='/api/cloud/team/document/file?'+new URLSearchParams({team:team.id,document:d.id});
-  return '<details class="s2-file-row" data-shared-document="'+esc(d.id)+'"><summary>'+esc(d.name)+' · '+esc(d.author)+'</summary>'+
+ (team.documents||[]).map(d=>'<details class="s2-file-row" data-shared-document="'+esc(d.id)+'"><summary>'+esc(d.name)+' · '+esc(d.author)+'</summary>'+
  '<div class="s2-toolbar">'+
- (d.original?'<a class="btn small primary" href="'+esc(url+'&view=download')+'" download>下载原件</a>'+
-  (/\.(?:pdf|png|jpe?g)$/i.test(d.original.name)?'<a class="btn small" href="'+esc(url+'&view=preview')+'" target="_blank" rel="noopener noreferrer">预览原件</a>':''):
+ (d.original?originalActions(team.id,d):
   '<small class="s2-muted">'+(canRemove(d)?'旧记录待补传原件。':'旧记录待补传原件，请联系上传者或组长。')+'</small>'+
   (originalFilesAvailable!==false&&canRemove(d)?'<button class="btn small primary" data-attach-original="'+esc(d.id)+'">补传原件</button>'+
     '<input type="file" hidden data-original-picker="'+esc(d.id)+'" accept="'+esc('.'+d.name.split('.').at(-1))+'">':''))+
  '<button class="btn small" data-copy-review="'+d.id+'">导入到文档教研</button>'+
  (originalFilesAvailable!==false&&canRemove(d)?'<button class="btn small" data-remove-document="'+d.id+'">删除共享文件</button>':'')+
- '</div>'+extractedText(d)+reportMarkup(d.report)+'</details>';
- }).join('')+
+ '</div>'+extractedText(d)+reportMarkup(d.report)+'</details>').join('')+
  '<div class="s2-toolbar"><button class="btn" id="openDocumentDesk">导入教师现有文档</button></div>';
  $('content').appendChild(section);
+ bindOriginalPreviews(team);
  bindId('openDocumentDesk',()=>{go('review');$('documentFiles')?.click();});
  section.querySelectorAll('button[data-copy-review]').forEach(b=>b.onclick=async()=>{
   const d=team.documents.find(x=>x.id===b.dataset.copyReview);

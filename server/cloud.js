@@ -112,16 +112,17 @@ export function createCloudApi(store){
  }
  else if(path.endsWith('document')){
   if(typeof b.text!=='string'||(!original&&!b.text.trim())||b.text.length>18000)fail('文档正文无效');
+  if(b.lessonId&&(!original||!w.lessons.some(item=>item.id===b.lessonId)))fail('未找到要关联的共享教案',404);
   if(b.report)validateInput(()=>validateDocumentReview(b.report,b.text));
   w.documents ||= [];
   if(original&&w.documents.some(d=>d.original?.id===original.id&&originalUploader(d)===u.id))return w;
   if(w.documents.length>=30)fail('最多保存30份教研文档');
-  w.documents.unshift({id:randomBytes(12).toString('hex'),name:original?.name||str(b.name,160),text:b.text,report:b.report||null,original,author:u.name,authorId:u.id,createdAt:new Date().toISOString()});
+  w.documents.unshift({id:randomBytes(12).toString('hex'),name:original?.name||str(b.name,160),text:b.text,report:b.report||null,original,author:u.name,authorId:u.id,createdAt:new Date().toISOString(),...(b.lessonId?{lessonId:b.lessonId}:{})});
  }
  else if(path.endsWith('publish')){
  const items=b.items;if(!Array.isArray(items)||!items.length||items.length>20||w.lessons.length+items.length>40)fail('一次可提交1至20份，组内最多40份教案，请归档后再上传');
  for(const item of items){validateInput(()=>validateLesson(item.lesson));if(JSON.stringify(item).length>70000)fail('单份备课包过大');const brief=Object.fromEntries(['topic','grade','subject','minutes','prior','resources','learners','context','requirements'].map(k=>[k,k==='minutes'?Number(item.brief?.[k])||40:str(item.brief?.[k],1800)]));w.lessons.unshift({id:randomBytes(12).toString('hex'),authorId:u.id,author:u.name,lesson:item.lesson,brief,createdAt:new Date().toISOString(),source:str(item.source,120)});}
- }else if(path.endsWith('remove')){const item=w.lessons.find(x=>x.id===b.lessonId);if(!item)fail('教案不存在',404);if(item.authorId!==u.id&&w.owner!==u.id)fail('仅作者或组长可移除教案',403);w.lessons=w.lessons.filter(x=>x.id!==b.lessonId);}
+ }else if(path.endsWith('remove')){const item=w.lessons.find(x=>x.id===b.lessonId);if(!item)fail('教案不存在',404);if(item.authorId!==u.id&&w.owner!==u.id)fail('仅作者或组长可移除教案',403);w.lessons=w.lessons.filter(x=>x.id!==b.lessonId);for(const doc of w.documents||[])if(doc.lessonId===item.id)delete doc.lessonId;}
  else {const text=str(b.text,1500);if(!text)fail('讨论内容不能为空');if(b.lessonId&&!w.lessons.some(x=>x.id===b.lessonId))fail('关联教案不存在');w.messages.push({id:randomBytes(12).toString('hex'),author:u.name,authorId:u.id,text,lessonId:str(b.lessonId,24),createdAt:new Date().toISOString()});w.messages=w.messages.slice(-150);}
  w.updatedAt=new Date().toISOString();if(JSON.stringify(w).length>2800000)fail('工作组容量已满，请删除旧文档或教案');return w;});
  if(removed)await originals.remove(w.id,originalUploader(removed),removed.original);

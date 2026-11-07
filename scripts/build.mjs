@@ -20,3 +20,6 @@ await mkdir('public/media',{recursive:true});
 await copyFile('worker/media/classroom-cover.jpg','public/media/classroom-cover.jpg');
 
 await copyFile('worker/media/paper-bridge.jpg','public/media/paper-bridge.jpg');
+
+await build({entryPoints:['worker/office-preview-frame.js'],outfile:'public/vendor/office-preview.js',bundle:true,minify:true,format:'iife',legalComments:'eof'});
+await copyFile('worker/office-preview.html','public/office-preview.html');

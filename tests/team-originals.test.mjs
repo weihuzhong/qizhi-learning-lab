@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createCloudApi} from '../server/cloud.js';
+import {templateCatalog,templateLesson} from '../worker/template-catalog.js';
 
 class Store {
  data=new Map();next=0;
@@ -35,16 +36,21 @@ test('team original attachments round trip, authorize members and remove bytes w
  const bytes=Buffer.alloc(900012,17);
  bytes.write('Original office bytes');
  const original={id:'a'.repeat(32),name:'课堂练习.pptx',size:bytes.length},id=team.id;
- const publish={id,original,name:original.name,text:'提取文字'};
+ const lesson=templateLesson(templateCatalog[0]);
+ const sharedLesson=await (await call('team/publish',{id,items:[{lesson,brief:{topic:lesson.title}}]},author)).json();
+ const lessonId=sharedLesson.team.lessons[0].id;
+ const publish={id,original,name:original.name,text:'提取文字',lessonId};
  assert.equal((await call('team/document',publish,author)).status,409);
  assert.equal((await call('team/document/chunk',{id,original,index:0,data:'bad'},author)).status,400);
  for(let i=0;i<2;i++){
   const data=bytes.subarray(i*900000,(i+1)*900000).toString('base64');
   assert.equal((await call('team/document/chunk',{id,original,index:i,data},author)).status,200);
  }
+ assert.equal((await call('team/document',{...publish,lessonId:'missing-lesson'},author)).status,404);
  const {team:shared}=await (await call('team/document',publish,author)).json();
  const [document]=shared.documents;
  assert.equal(document.original.chunks,2);
+ assert.equal(document.lessonId,lessonId);
  assert.equal(document.report,null);
  assert.equal((await call('team/document',publish,author).then(r=>r.json())).team.documents.length,1);
  const url='team/document/file?team='+id+'&document='+document.id+'&index=';
@@ -57,6 +63,9 @@ test('team original attachments round trip, authorize members and remove bytes w
  assert.equal(full.headers.get('content-disposition'),"attachment; filename*=UTF-8''"+encodeURIComponent(original.name));
  assert.deepEqual(Buffer.from(await full.arrayBuffer()),bytes);
  assert.equal((await call(download+'preview',undefined,reader)).status,415);
+ const afterRemoval=await (await call('team/remove',{id,lessonId},author)).json();
+ assert.equal(afterRemoval.team.documents[0].lessonId,undefined);
+ assert.equal((await call(download+'download',undefined,reader)).status,200);
  const result=[];
  for(let i=0;i<2;i++){
   const r=await call(url+i,undefined,reader);

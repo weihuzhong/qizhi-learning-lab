@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教研原件预览</title>
+<style>
+:root{font:1rem/1.5 system-ui,sans-serif;color:#172d25;background:#f0eee7}
+body{margin:0}
+#preview-controls{position:sticky;top:0;z-index:2;background:#fbfaf5;padding:8px 16px;align-items:center;justify-content:center;gap:12px}
+#preview-controls:not([hidden]){display:flex}
+button{font:inherit;color:inherit;background:#fff;border:1px solid #a4b6ae;border-radius:6px;padding:4px 12px}
+button:disabled{opacity:.5}button:focus-visible{outline:2px solid #245e51;outline-offset:2px}
+#office-document{overflow:auto}
+#office-document.slides{padding:16px;box-sizing:border-box}
+#office-document .docx-wrapper{min-width:max-content;padding:16px;background:#f0eee7}
+#office-document a{pointer-events:none}
+</style>
+<script defer src="/vendor/office-preview.js"></script>
+</head>
+<body>
+<nav id="preview-controls" aria-label="幻灯片翻页" hidden>
+<button type="button" id="previous-slide">上一页</button>
+<span id="slide-count" aria-live="polite"></span>
+<button type="button" id="next-slide">下一页</button>
+</nav>
+<main id="office-document"></main>
+</body>
+</html>

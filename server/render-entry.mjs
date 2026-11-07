@@ -44,6 +44,8 @@ const assets = new Map([
   ['/vendor/pptx.js', ['vendor/pptx.js', 'text/javascript; charset=utf-8']],
   ['/vendor/docx.js', ['vendor/docx.js', 'text/javascript; charset=utf-8']],
   ['/vendor/zip.js', ['vendor/zip.js', 'text/javascript; charset=utf-8']],
+  ['/vendor/office-preview.js', ['vendor/office-preview.js', 'text/javascript; charset=utf-8']],
+  ['/office-preview.html', ['office-preview.html', 'text/html; charset=utf-8']],
   ['/media/classroom-cover.jpg', ['media/classroom-cover.jpg', 'image/jpeg']],
   ['/media/paper-bridge.jpg', ['media/paper-bridge.jpg', 'image/jpeg']],
 ]);
@@ -199,7 +201,9 @@ createServer(async (req, res) => {
       'cache-control': asset[1].startsWith('text/html') ? 'no-cache' : 'public, max-age=300',
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'same-origin',
-      'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+      'content-security-policy': url.pathname === '/office-preview.html'
+        ? "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+        : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
     });
     res.end(req.method === 'HEAD' ? undefined : asset[0]);
   } catch {
