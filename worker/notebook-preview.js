@@ -201,7 +201,7 @@ prepPage=function(){
 const notebookEntries=[
  ['prep','edit','备课与课件','填写条件、编辑教案、制作 PPT'],
  ['templates','book','教学模板','选一个课堂框架再调整'],
- ['team','team','团队备课','分配任务、交换备课包']
+ ['team','team','团队备课','分配任务、共享教案']
 ];
 const notebookTools=[
  ['schedule','book','排课工作台','安排课次，检查冲突'],

@@ -9,7 +9,7 @@ export function createAppApi({cloudStore,pptStore,vaultSecret,model='deepseek-fl
  const ppt=createPptService(pptStore,{LLM_MODEL:model},{billing});
  const cloud=createCloudApi(cloudStore);
  return async req=>{try{const path=new URL(req.url).pathname;
-  if(path==='/api/status'){const state=await billing.status(req);return worker.fetch(req,{LLM_MODEL:model,USER_AUTHENTICATED:state.authenticated,USER_MODEL_CONFIGURED:state.configured});}
+  if(path==='/api/status'){const state=await billing.status(req);return worker.fetch(req,{LLM_MODEL:model,USER_AUTHENTICATED:state.authenticated,USER_MODEL_CONFIGURED:state.configured,USER_ORIGINAL_FILES:true});}
   if(path==='/api/cloud/model'||path.startsWith('/api/cloud/model/'))return billing.handle(req);
   if(path.startsWith('/api/cloud/'))return cloud(req);
   if(path.startsWith('/api/ppt/'))return ppt(req);

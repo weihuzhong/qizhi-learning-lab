@@ -56,33 +56,6 @@ appearanceDialog.addEventListener('close',()=>appearanceTrigger.focus());
 appearanceDialog.querySelectorAll('[data-palette-choice],[data-mode-choice]').forEach(el=>el.onclick=()=>{const saved=window.qizhiAppearance.set(el.dataset.paletteChoice?{palette:el.dataset.paletteChoice}:{mode:el.dataset.modeChoice});appearanceDialog.querySelector('.appearance-note').textContent=saved?'已保存 · 不影响课件的设计主题。':'已应用 · 浏览器禁止存储，关闭后可能无法保留。';});
 document.addEventListener('qizhi:appearance',syncAppearanceControls);syncAppearanceControls();
 
-home=function(){
- const {lesson,job}=T();
- const cards=[
-  ['prep','edit','备课与课件','填写教学条件、编辑教案，制作课堂 PPT'],
-  ['templates','book','教学模板','按课堂类型选择模板，载入后再按学情调整'],
-  ['team','team','团队备课','分配备课任务，审阅并交换备课包']
- ];
- const utilities=[
-  ['schedule','book','排课工作台','安排课次，检查时间冲突'],
-  ['online','team','在线教研组','共享教案，留下审阅意见'],
-  ['memory','check','教学偏好','管理自己确认的备课规则'],
-  ['account','settings','账号与云端','同步教案，绑定个人密钥']
- ];
- const date=new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long',timeZone:'Asia/Shanghai'}).format(new Date());
- const [sampleTitle,sampleSubtitle]=sample.title.split('：',2);
- const sampleMinutes=sample.phases.reduce((sum,phase)=>sum+phase.minutes,0);
- const sampleSteps=sample.phases.slice(0,3).map(phase=>'<li><span>'+esc(phase.name)+'</span><span>'+phase.minutes+' 分钟</span></li>').join('');
- const resumeTitle=lesson?.title||(!job?.complete?job?.brief?.topic:'');
- const resume=resumeTitle?'<section class="desk-resume"><span class="desk-tool-icon">'+uiIcon('book')+'</span><div><small>'+(lesson?'当前浏览器的教案':'尚未完成的备课')+'</small><h3>'+esc(resumeTitle)+'</h3></div><button class="btn" data-teachgo="prep">继续备课 '+uiIcon('arrow')+'</button></section>':'';
- return '<div class="desk-heading"><h1>备课工作台</h1><span class="desk-date">'+date+'</span></div>'+
-  '<section class="desk-hero" aria-labelledby="deskHeroTitle"><div class="desk-hero-copy"><h2 id="deskHeroTitle">从课题到课堂课件</h2><p>为教师和支教团队准备教案、课堂活动与可编辑 PPT。</p><div class="row"><button class="btn primary" id="startStudio">开始备课 '+uiIcon('arrow')+'</button><button class="btn desk-secondary" id="judgeDemo">免登录体验示例</button></div><small>使用 AI 生成教案或课件时，需绑定个人 DeepSeek 密钥。</small></div>'+
-  '<div class="desk-art"><div class="desk-art-note"><span>教案示例 · 小学科学 · '+sampleMinutes+' 分钟</span><h3>'+esc(sampleTitle)+'</h3>'+(sampleSubtitle?'<p>'+esc(sampleSubtitle)+'</p>':'')+'<ol aria-label="示例教案的前三个课堂环节">'+sampleSteps+'</ol></div></div></section>'+
-  '<div class="desk-section-title"><h2>备课入口</h2></div><div class="desk-start-grid">'+cards.map(([page,icon,title,description])=>'<button class="desk-start" data-teachgo="'+page+'"><span class="desk-tool-icon">'+uiIcon(icon)+'</span><span class="desk-entry-text"><strong>'+title+'</strong><span class="desk-entry-description">'+description+'</span></span>'+uiIcon('arrow')+'</button>').join('')+'</div>'+
-  resume+
-  '<div class="desk-section-title"><h2>协作与设置</h2></div><div class="desk-utilities">'+utilities.map(([page,icon,title,description])=>'<button data-teachgo="'+page+'"><span class="desk-utility-icon">'+uiIcon(icon)+'</span><span><strong>'+title+'</strong><small>'+description+'</small></span>'+uiIcon('arrow')+'</button>').join('')+'</div>'+
-  '<div class="desk-footer"><span>启知未来 · 协同备课工作台</span><button data-teachgo="templates">浏览教学模板 '+uiIcon('arrow')+'</button></div>';
-};
 const appearanceNav=nav;nav=function(){appearanceNav();document.querySelectorAll('#navigation .nav').forEach(el=>el.setAttribute('aria-current',el.classList.contains('active')?'page':'false'));};
 const appearanceRender=render;
 render=function(){

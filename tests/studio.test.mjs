@@ -17,7 +17,23 @@ test('cloud auth, CSRF, personal isolation, concurrency protection, team permiss
 });
 test('staged service validates each independent response and retains structured upstream errors',async()=>{const old=globalThis.fetch,brief={topic:'纸桥',subject:'科学',grade:'五年级',minutes:40,prior:'观察过桥',learners:'30人',resources:'纸、积木；无投影'};const outline={title:'纸桥',objectives:['比较折法'],keypoints:['公平比较'],difficulties:['控制变量'],preparation:['同规格纸'],phases:[{name:'预测',minutes:5,purpose:'收集猜想'},{name:'实验',minutes:35,purpose:'记录证据'}]};let calls=0;globalThis.fetch=async()=>{calls++;return Response.json({choices:[{message:{content:JSON.stringify(outline)}}]})};try{const env={LLM_API_KEY:'test-only',LLM_MODEL:'deepseek-flash',LLM_BASE_URL:'https://api.deepseek.com'};let r=await stagedApi(new Request('https://qizhi.test/api/lesson/outline',{method:'POST',headers:{origin:'https://qizhi.test'},body:JSON.stringify({brief})}),env);assert.equal(r.status,200);assert.equal(calls,1);r=await stagedApi(new Request('https://qizhi.test/api/lesson/outline',{method:'POST',headers:{origin:'https://qizhi.test'},body:JSON.stringify({brief:{...brief,resources:'未提供'}})}),env);assert.equal(r.status,200);assert.equal(calls,2);}finally{globalThis.fetch=old;}});
 
-test('batch importer parses real JSON/ZIP, reports invalid files and rejects inflated entries',async()=>{const {studioClient}=await import('../worker/studio-client.js');const fflate=await import('fflate');const {extractTeachingFiles}=await import('../worker/document-review.js');const start=studioClient.indexOf('async function parseBatch('),end=studioClient.indexOf('const previousNav=',start);const parseBatch=new Function('window','validateClientLesson','extractTeachingFiles',studioClient.slice(start,end)+';return parseBatch;')({fflate},validateLesson,extractTeachingFiles);const data=JSON.stringify({brief:{topic:'纸桥'},lesson:templateLesson(templateCatalog[2])});const zip=fflate.zipSync({'教案.qizhi.json':new TextEncoder().encode(data),'坏文件.json':new TextEncoder().encode('oops'),'readme.txt':new TextEncoder().encode('ignored')});const file={name:'批量.zip',size:zip.length,arrayBuffer:async()=>zip.buffer};const result=await parseBatch([file]);assert.equal(result.items.length,1);assert.equal(result.errors.length,1);assert.equal(result.documents.length,1);const bomb=fflate.zipSync({'超大.json':new Uint8Array(1100000)});const rejected=await parseBatch([{name:'超大.zip',size:bomb.length,arrayBuffer:async()=>bomb.buffer}]);assert.equal(rejected.items.length,0);assert(rejected.errors.some(x=>x.includes('超过1MB')));});
+test('document import preserves the original bytes and rejects non-document ZIP entries',async()=>{
+ const {extractTeachingFiles}=await import('../worker/document-review.js');
+ const {zipSync,unzipSync,strToU8}=await import('fflate');
+ const word=zipSync({'word/document.xml':strToU8('<w:document><w:p><w:r><w:t>分数教案</w:t></w:r></w:p></w:document>')});
+ const source=new File([zipSync({'子目录/教师教案.docx':word,'附件/旧课件.ppt':new Uint8Array([1,2,3]),'旧备课包.json':strToU8('{}')})],'文件.zip');
+ const result=await extractTeachingFiles([source],unzipSync,{keepOriginals:true});
+ assert.deepEqual(result.errors,[]);
+ assert.equal(result.results.length,2);
+ assert.equal(result.results[0].name,'教师教案.docx');
+ assert.equal(result.results[0].text,'分数教案');
+ assert.deepEqual(new Uint8Array(await result.results[0].original.arrayBuffer()),word);
+ assert.equal(result.results[1].text,'');
+ assert.deepEqual(new Uint8Array(await result.results[1].original.arrayBuffer()),new Uint8Array([1,2,3]));
+ const invalid=await extractTeachingFiles([new File(['{}'],'旧备课包.json')],unzipSync,{keepOriginals:true});
+ assert.equal(invalid.results.length,0);
+ assert.match(invalid.errors[0],/格式不支持/);
+});
 
 test('cloud preserves partial confirmed workflows and rejects corrupted completed phases',async()=>{const api=createCloudApi(new MemoryStore());const u=await run(api,'register',{username:'workflow',password:'workflow-test-password-1'});const brief={topic:'纸桥',subject:'科学',grade:'五年级',minutes:40};const outline={title:'纸桥',objectives:['比较形状'],keypoints:['控制变量'],difficulties:['公平比较'],preparation:['纸'],phases:[{name:'预测',minutes:5,purpose:'收集观点'},{name:'实验',minutes:35,purpose:'收集证据'}]};const job={brief,outline,confirmed:true,phases:[{name:'预测',minutes:5,teacher:'提问',student:'预测',check:'说出理由'}],finish:null};const profile={lessons:[],preferences:[],schedule:[],workspace:{brief,lesson:null,job}};assert.equal((await run(api,'profile',{version:0,profile},u.cookie)).status,200);assert.equal((await run(api,'profile',undefined,u.cookie)).body.profile.workspace.job.phases.length,1);job.phases[0].minutes=6;assert.notEqual((await run(api,'profile',{version:1,profile},u.cookie)).status,200);});
 

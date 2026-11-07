@@ -1,5 +1,6 @@
 import {randomBytes,createCipheriv,createDecipheriv,hkdfSync} from 'node:crypto';
 import {readCloudSession} from './cloud.js';
+import {modelOptions,modelError,modelFetch} from '../worker/model-provider.js';
 const fail=(error,status=400,code='MODEL_BINDING_REQUIRED')=>{throw Object.assign(Error(error),{status,code})};
 const json=(value,status=200)=>Response.json(value,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const credentialPath=id=>'model-credentials/'+id;
@@ -26,6 +27,20 @@ export function createUserModel(store,{vaultSecret,model='deepseek-flash',fetche
   if(req.method!=='POST')fail('请使用POST',405);await limit(u.id);
   if(path==='/api/cloud/model/remove'){await store.delete(credentialPath(u.id));return json(summary(null));}
   if(path==='/api/cloud/model/balance'){const env=await forUser(u.id);return json({balance:await checkBalance(env.LLM_API_KEY)});}
+  if(path==='/api/cloud/model/test'){
+   const env=await forUser(u.id);
+   let response;
+   try{
+    response=await modelFetch(env.LLM_BASE_URL+'/chat/completions',{method:'POST',headers:{authorization:'Bearer '+env.LLM_API_KEY,'content-type':'application/json'},
+     body:JSON.stringify({model:env.LLM_MODEL,messages:[{role:'user',content:'请只回复：连接正常。'}],...modelOptions(env,24)})},16000,fetcher);
+   }catch(error){
+    return json({error:error.name==='TimeoutError'?'DeepSeek 连接超时，请稍后重新测试。':'暂时无法连接 DeepSeek，请稍后重新测试。',code:'MODEL_CONNECTION_FAILED'},502);
+   }
+   if(!response.ok)return json(await modelError(response),502);
+   const result=await response.json().catch(()=>null),answer=result?.choices?.[0]?.message?.content;
+   if(typeof answer!=='string'||!answer.trim())return json({error:'DeepSeek 未返回可用文本，请重新测试。',code:'EMPTY_MODEL_REPLY'},502);
+   return json({ok:true,model:env.LLM_MODEL,answer:answer.trim().slice(0,100)});
+  }
   if(path!=='/api/cloud/model')fail('接口不存在',404);
   const b=await req.json(),key=String(b.apiKey||'').trim();if(!/^sk-[A-Za-z0-9_-]{20,253}$/.test(key))fail('请填写完整的DeepSeek API密钥，以sk-开头');
   const sealed=seal(key,u.id),balance=await checkBalance(key),record={sealed,last4:key.slice(-4),verifiedAt:new Date().toISOString(),balance};await store.setJSON(credentialPath(u.id),record);return json(summary(record));

@@ -3,12 +3,13 @@ export function validateDocumentReview(report,text){
  for(const k of ['strengths','risks']){if(!Array.isArray(report[k])||report[k].length>5)throw Error('分析条目无效');for(const item of report[k]){if(typeof item.point!=='string'||item.point.length>500||typeof item.evidence!=='string'||!item.evidence.trim()||item.evidence.length>200||!text.replace(/\s+/g,'').includes(item.evidence.replace(/\s+/g,'')))throw Error('分析中的引文没有在原文中找到，请重新分析');if(k==='risks'&&(typeof item.suggestion!=='string'||item.suggestion.length>600))throw Error('改进建议无效');}}
  if(!Array.isArray(report.nextSteps)||report.nextSteps.length>5||report.nextSteps.some(x=>typeof x!=='string'||x.length>500))throw Error('后续建议无效');return report;
 }
-export async function extractTeachingFiles(files, unzip, { teachingPackages = false } = {}) {
+export async function extractTeachingFiles(files, unzip, { teachingPackages = false, keepOriginals = false } = {}) {
  const results = [], packages = [], errors = [];
  const decoder = new TextDecoder();
  const MB = 1024 * 1024;
  let inputSize = 0, expandedSize = 0;
- const supported = /\.(docx|pptx|xlsx|txt|md|csv|json)$/i;
+ const supported = keepOriginals?/\.(docx?|pptx?|xlsx?|txt|md|csv|pdf|png|jpe?g)$/i:/\.(docx|pptx|xlsx|txt|md|csv|json)$/i;
+ let original;
  const decode = value => value.replace(/&(#x[\da-f]+|#\d+|lt|gt|quot|apos|amp);/gi, (raw, entity) => {
   if (entity[0] === '#') {
    const n = entity[1]?.toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
@@ -37,6 +38,13 @@ export async function extractTeachingFiles(files, unzip, { teachingPackages = fa
  }
  function add(name, text, style = '') {
   let remaining = text.trim();
+  if(keepOriginals){
+   if(results.length>=20)throw Error('本批最多20份文件');
+   let end=18000;
+   if(/[\uD800-\uDBFF]/.test(remaining[end-1]))end--;
+   results.push({name:original.name,text:remaining.slice(0,end),style,original,truncated:remaining.length>end});
+   return;
+  }
   if (!remaining) throw Error('没有可提取的文字或表格数据；扫描件和图片需先识别');
   let part = 1;
   const split = remaining.length > 18000;
@@ -102,9 +110,14 @@ export async function extractTeachingFiles(files, unzip, { teachingPackages = fa
   }).filter(Boolean).join('\n\n');
   return add(name,text);
  }
- function read(name, bytes) {
+ function read(name, bytes, file) {
   if (bytes.length > 30*MB) throw Error('单文件超过30MB');
   const ext = name.split('.').pop().toLowerCase();
+  if(keepOriginals){
+   if(!supported.test(name)||!bytes.length)throw Error('文件为空或格式不支持');
+   original=file||new File([bytes],name.split(/[\\/]/).pop());
+   if(['doc','ppt','xls','pdf','png','jpg','jpeg'].includes(ext))return add(name,'');
+  }
   if (['txt','md','csv'].includes(ext)) return add(name,decoder.decode(bytes));
   if (ext === 'json') {
    if (bytes.length > 1024*1024) throw Error('JSON 备课包超过1MB');
@@ -127,7 +140,7 @@ export async function extractTeachingFiles(files, unzip, { teachingPackages = fa
    inputSize += file.size;
    if (inputSize > 60*MB) throw Error('每批原文件合计最多60MB，请分批导入');
    const bytes = new Uint8Array(await file.arrayBuffer());
-   if (!/\.zip$/i.test(file.name)) { read(file.name,bytes); continue; }
+   if (!/\.zip$/i.test(file.name)) { read(file.name,bytes,file); continue; }
    const entries = selected(bytes,name=>supported.test(name)&&!name.startsWith('__MACOSX/')&&!name.split('/').some(part=>part.startsWith('.')),60*MB,'ZIP 所选文件解压超过60MB');
    const items = Object.entries(entries);
    if (!items.length) throw Error('压缩包内没有可读取的文档');

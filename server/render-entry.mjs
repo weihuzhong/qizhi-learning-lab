@@ -88,10 +88,16 @@ async function forwardApi(req, res, url) {
 
   if (url.pathname === '/api/ppt/config' && session?.some(cookie => cookie.startsWith('qizhi_session='))) warmPptRunner();
   const draftFile = req.method === 'GET' && /^\/api\/ppt\/drafts\/[a-f0-9]{32}\/(?:deck\.pptx|page-\d{2}\.png|audit\.json)$/.test(url.pathname);
-  let response = await fetch((draftFile || overflowJob ? pptRunner : backend) + url.pathname + url.search, {
+  let basicJob=false;
+  if(req.method==='POST'&&url.pathname==='/api/ppt/jobs'){
+    try{basicJob=JSON.parse(body)?.mode==='basic';}catch{}
+  }
+  if(basicJob)headers.set('origin',origin);
+  const target=basicJob?pptRunner+'/api/ppt/overflow/jobs':(draftFile||overflowJob?pptRunner:backend)+url.pathname+url.search;
+  let response = await fetch(target, {
     method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(90000),
   });
-  if (req.method === 'POST' && url.pathname === '/api/ppt/jobs' && response.status === 429) {
+  if (!basicJob && req.method === 'POST' && url.pathname === '/api/ppt/jobs' && response.status === 429) {
     const oldLimit = await response.clone().json().catch(() => null);
     if (oldLimit?.error === '任务较多，请稍后再试') {
       headers.set('origin', origin);
