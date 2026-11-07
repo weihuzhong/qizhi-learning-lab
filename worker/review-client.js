@@ -29,6 +29,10 @@ function chunkBase64(blob){
 }
 async function shareDocument(id,document,file){
  const body={id,name:document.name,text:document.text,report:document.report||null};
+ if(originalFilesAvailable===false){
+  if(file||!document.text?.trim())throw Error('目前只能分享已提取的文字');
+  body.report ||= {topic:document.name.slice(0,160),summary:'从原文件提取文字，待组内审阅。',strengths:[],risks:[],nextSteps:[]};
+ }
  if(!file)return (await api('cloud/team/document',body)).team;
  const original={id:crypto.randomUUID().replaceAll('-',''),name:file.name||document.name,size:file.size};
  try{
@@ -177,13 +181,18 @@ const docRender=render;render=function(){
    if(reviewBusy)return;
    const id=$('documentTeam').value,d=S().documents[documentIndex];
    if(!cloud.user||!id)return toast('请先登录并加入教研组');
+   const textOnly=originalFilesAvailable===false;
+   if(textOnly&&d.fileId){
+    if(!d.text?.trim())return toast('原件共享暂未开放。此文件没有可分享的文字，原件仍在本机。');
+    if(!confirm('原件共享暂未开放。先分享提取文字吗？原文件将保留在本机。'))return;
+   }
    reviewBusy=true;render();
    try{
-    const file=d.fileId?await originalTransaction('readonly',store=>store.get(d.fileId)):null;
-    if(d.fileId&&!file)throw Error('本机原文件已清理，请重新导入');
+    const file=!textOnly&&d.fileId?await originalTransaction('readonly',store=>store.get(d.fileId)):null;
+    if(!textOnly&&d.fileId&&!file)throw Error('本机原文件已清理，请重新导入');
     const team=await shareDocument(id,d,file);
     if(cloud.team?.id===id)cloud.team=team;
-    toast('已分享到所选教研组');
+    toast(file?'原件已分享到所选教研组':'提取文字已分享到所选教研组');
    }catch(e){toast(e.message);}
    finally{reviewBusy=false;if(active==='review')render();}
   });
@@ -195,12 +204,13 @@ const docRender=render;render=function(){
  const section=document.createElement('section');
  section.className='s2-card';
  section.innerHTML='<h3>共享文档与教研分析 · '+(team.documents||[]).length+'</h3>'+
+ (originalFilesAvailable===false?'<p class="s2-muted">当前可分享和导入提取文字。原件共享与共享文档删除暂未开放。</p>':'')+
  (team.documents||[]).map(d=>'<details class="s2-file-row"><summary>'+esc(d.name)+' · '+esc(d.author)+'</summary>'+
  extractedText(d)+reportMarkup(d.report)+'<div class="s2-toolbar">'+
  (d.original?'<button class="btn small" data-shared-file="'+d.id+'">下载原文件</button>':
  '<small class="s2-muted">旧记录仅保存了提取文字。</small>')+
  '<button class="btn small" data-copy-review="'+d.id+'">导入到文档教研</button>'+
- (canRemove(d)?'<button class="btn small" data-remove-document="'+d.id+'">删除共享文件</button>':'')+
+ (originalFilesAvailable!==false&&canRemove(d)?'<button class="btn small" data-remove-document="'+d.id+'">删除共享文件</button>':'')+
  '</div></details>').join('')+
  '<div class="s2-toolbar"><button class="btn" id="openDocumentDesk">导入教师现有文档</button></div>';
  $('content').appendChild(section);

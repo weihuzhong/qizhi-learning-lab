@@ -178,19 +178,27 @@ function bindStudio(){
    importDocuments=result.results;importErrors=result.errors;render();
   }catch(error){toast(error.message);e.target.disabled=false;}
  };
- bindId('publishOfficeBatch',()=>cloudAction(async()=>{
-  const id=cloud.team.id;
-  if((cloud.team.documents||[]).length+importDocuments.length>30)throw Error('教研组最多保存30份共享文档，请减少本批份数');
-  let sent=0;
-  while(importDocuments.length){
-   const d=importDocuments[0];
-   try{cloud.team=await shareDocument(id,d,d.original);}
-   catch(error){throw Error('已分享 '+sent+' 份，剩余内容已保留：'+error.message);}
-   importDocuments.shift();
-   sent++;
+ bindId('publishOfficeBatch',()=>{
+  if(cloud.busy||!importDocuments.length)return;
+  const textOnly=originalFilesAvailable===false;
+  if(textOnly){
+   if(importDocuments.some(d=>!d.text?.trim()))return toast('原件共享暂未开放，请先从这批移除没有可提取文字的文件。');
+   if(!confirm('原件共享暂未开放。这批只分享提取文字，继续吗？'))return;
   }
-  toast('已分享 '+sent+' 份文档');
- }));
+  return cloudAction(async()=>{
+   const id=cloud.team.id;
+   if((cloud.team.documents||[]).length+importDocuments.length>30)throw Error('教研组最多保存30份共享文档，请减少本批份数');
+   let sent=0;
+   while(importDocuments.length){
+    const d=importDocuments[0];
+    try{cloud.team=await shareDocument(id,d,textOnly?null:d.original);}
+    catch(error){throw Error('已分享 '+sent+' 份，剩余内容已保留：'+error.message);}
+    importDocuments.shift();
+    sent++;
+   }
+   toast('已分享 '+sent+' 份'+(textOnly?'提取文字':'文档原件'));
+  });
+ });
 
  document.querySelectorAll('[data-review-open]').forEach(b=>b.onclick=()=>{reviewSelected=b.dataset.reviewOpen;render();});
  bindId('sendTeamMessage',()=>{const text=$('teamMessage').value.trim(),lessonId=$('messageLesson').value;if(!text)return toast('请先填写讨论内容');cloudAction(async()=>{cloud.team=(await api('cloud/team/message',{id:cloud.team.id,text,lessonId})).team;});});
