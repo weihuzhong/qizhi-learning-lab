@@ -1,7 +1,7 @@
 import {allowedResource,maxBodyBytes,signaturePayload,storageHeaders} from './protocol.js';
 
 // Populated at deployment with this installation's public verification key.
-const publicJwk={"kty":"OKP","crv":"Ed25519","x":"pJ-cn6KcwR-d46GVH39WGyRXCisxLw3wUOx9NChu5JU"};
+const publicJwk={"kty":"OKP","crv":"Ed25519","x":"E0P_ySDFXfZpOtGO4Ib18RNTYrRM39EQuFAvGnm-EcY"};
 const publicKey=await crypto.subtle.importKey('jwk',publicJwk,'Ed25519',false,['verify']);
 const project=new URL(Deno.env.get('SUPABASE_URL')!).origin;
 const secret=Deno.env.get('SUPABASE_SECRET_KEYS')
