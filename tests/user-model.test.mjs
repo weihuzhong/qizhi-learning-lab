@@ -74,3 +74,21 @@ test('upstream invalid credentials and exhausted balance never trigger owner-key
  const previous=globalThis.fetch;let calls=0;
  try{for(const status of [401,402]){globalThis.fetch=async(url,opts)=>{calls++;assert.equal(opts.headers.authorization,'Bearer '+keyA);return Response.json({error:{code:'upstream_error'}},{status})};const r=await run(api,'chat',{mode:'prep',messages:[{role:'user',content:'test'}]},a.cookie);assert.equal(r.status,502);assert.equal(r.data.upstream_status,status);assert(r.data.error.includes('你的DeepSeek'));}assert.equal(calls,2);}finally{globalThis.fetch=previous;}
 });
+
+test('an imported binding with an unavailable vault key preserves login and requests a new binding',async()=>{
+ const store=new Store();
+ const cloud=createCloudApi(store);
+ const account=await register(cloud,'migrationuser');
+ const original=createUserModel(store,{vaultSecret,fetcher:balanceFetcher});
+ assert.equal((await run(original.handle,'cloud/model',{apiKey:keyA},account.cookie)).status,200);
+ const migrated=createUserModel(store,{vaultSecret:vaultSecret+'-rotated',fetcher:balanceFetcher});
+ const status=await migrated.status(request('status',undefined,account.cookie));
+ assert.equal(status.authenticated,true);
+ assert.equal(status.configured,false);
+ const model=await run(migrated.handle,'cloud/model',undefined,account.cookie);
+ assert.equal(model.data.bound,false);
+ assert.equal(model.data.rebindRequired,true);
+ await assert.rejects(migrated.forRequest(request('chat',{},account.cookie)),{code:'MODEL_REBIND_REQUIRED'});
+ assert.equal((await run(migrated.handle,'cloud/model',{apiKey:keyB},account.cookie)).status,200);
+ assert.equal((await migrated.status(request('status',undefined,account.cookie))).configured,true);
+});

@@ -182,7 +182,7 @@ createServer(async (req, res) => {
     const url = new URL(req.url, origin);
     if (url.origin !== origin) return json(res, 400, { error: '请求地址无效' });
     if (!['GET', 'HEAD', 'POST'].includes(req.method)) return json(res, 405, { error: '不支持的请求方法' });
-    if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true });
+    if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, dataBackend: localApi ? 'supabase' : 'netlify', writesPaused: readOnly });
     const worker = url.pathname.startsWith('/api/ppt/worker/');
     if (apiRoute.test(url.pathname) && (!worker || (localApi && req.method === 'POST'))) {
       return await forwardApi(req, res, url);

@@ -20,7 +20,7 @@ async function snapshot(store){
 }
 
 async function migrate(namespace,source,target,records){
- for(const [key,etag] of records){
+ async function copy([key,etag]){
   const file=isFileKey(namespace,key);
   const previous=await source.getWithMetadata(key,{type:file?'arrayBuffer':'json'});
   if(!previous||previous.etag!==etag)throw Error('读取期间旧数据发生变化，请重新核对');
@@ -32,8 +32,7 @@ async function migrate(namespace,source,target,records){
   if(file){
    const bytes=Buffer.from(previous.data);
    await target.set(key,bytes,options);
-   const copied=await target.get(key,{type:'arrayBuffer'});
-   const current=await target.getMetadata(key);
+   const [copied,current]=await Promise.all([target.get(key,{type:'arrayBuffer'}),target.getMetadata(key)]);
    if(!copied||!bytes.equals(Buffer.from(copied))||!isDeepStrictEqual(options.metadata,current?.metadata)){
     throw Error('新旧文件校验不一致，停止切换');
    }
@@ -45,6 +44,12 @@ async function migrate(namespace,source,target,records){
    }
   }
  }
+ const entries=[...records];
+ for(let offset=0;offset<entries.length;offset+=6){
+  const results=await Promise.allSettled(entries.slice(offset,offset+6).map(copy));
+  const failed=results.find(result=>result.status==='rejected');
+  if(failed)throw failed.reason;
+ }
  const actual=new Set();
  for await(const key of target.listKeys())actual.add(key);
  if(!isDeepStrictEqual(actual,new Set(records.keys())))throw Error('新存储存在额外或缺失的记录，停止切换');
@@ -52,11 +57,13 @@ async function migrate(namespace,source,target,records){
 
 async function run(){
  const mode=process.argv[2];
- if(!['--inspect','--copy'].includes(mode))throw Error('请指定 --inspect 或 --copy');
+ if(!['--inspect','--copy','--verify'].includes(mode))throw Error('请指定 --inspect、--copy 或 --verify');
  const {NETLIFY_SITE_ID:siteID,NETLIFY_AUTH_TOKEN:token}=process.env;
  if(!siteID||!token)throw Error('请在本机配置 NETLIFY_SITE_ID 和 NETLIFY_AUTH_TOKEN');
- const targets=mode==='--copy'?createSupabaseStores(process.env):null;
- if(targets&&await targets.cloudStore.get(migrationKey))throw Error('此项目已经完成导入核验');
+ const targets=mode==='--inspect'?null:createSupabaseStores(process.env);
+ const marker=await targets?.cloudStore.get(migrationKey);
+ if(mode==='--copy'&&marker)throw Error('此项目已经完成导入核验');
+ if(mode==='--verify'&&!marker?.verified)throw Error('此项目尚未完成导入核验');
  const stores=[];
  for(const {namespace,name,target} of config){
   const source=getStore({name,siteID,token,consistency:'strong'});
@@ -71,12 +78,17 @@ async function run(){
  }
  if(!targets)return;
  const digest=createHash('sha256');
- for(const {namespace,source,records,target} of stores)await migrate(namespace,source,target,records);
+ if(mode==='--copy')for(const {namespace,source,records,target} of stores)await migrate(namespace,source,target,records);
  for(const {namespace,source,records} of stores){
   if(!isDeepStrictEqual(records,await snapshot(source)))throw Error('迁移期间旧数据发生变化，请核对后再切换');
   digest.update(JSON.stringify([namespace,[...records]]));
  }
  const manifest=digest.digest('hex');
+ if(mode==='--verify'){
+  if(marker.manifest!==manifest)throw Error('旧站数据与已导入快照不一致，请停止切换');
+  console.log('源数据与导入快照一致',manifest);
+  return;
+ }
  const {modified}=await targets.cloudStore.setJSON(migrationKey,{verified:true,manifest,verifiedAt:new Date().toISOString()},{onlyIfNew:true});
  if(!modified)throw Error('另一项导入已经完成，请核对迁移状态');
  console.log('导入校验通过',manifest);

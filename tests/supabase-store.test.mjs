@@ -83,3 +83,31 @@ test('original attachments use the private bucket and preserve bytes and declare
  await originals.remove(team,author,descriptor);
  assert.equal(objects.size,0);
 });
+
+test('signed storage requests bind the operation and body and reject other project resources',async()=>{
+ const {generateKeyPairSync}=await import('node:crypto');
+ const {createStorageFetch}=await import('../server/supabase-storage-fetch.js');
+ const {signaturePayload,storageHeaders}=await import('../supabase/functions/qizhi-storage/protocol.js');
+ const {privateKey,publicKey}=generateKeyPairSync('ed25519');
+ const secret=privateKey.export({format:'der',type:'pkcs8'}).toString('base64');
+ const publicVerification=await crypto.subtle.importKey('jwk',publicKey.export({format:'jwk'}),'Ed25519',false,['verify']);
+ const fetcher=createStorageFetch(new URL(project),secret,async(url,options)=>{
+  assert.equal(url.pathname,'/functions/v1/qizhi-storage');
+  const req=new Request(url,options),method=req.headers.get('x-qizhi-method'),resource=req.headers.get('x-qizhi-resource');
+  const [,timestamp,encoded]=/^Qizhi (\d+)\.([\w-]+)$/.exec(req.headers.get('authorization'));
+  const signature=Buffer.from(encoded,'base64url'),headers=storageHeaders(req.headers);
+  const body=await req.arrayBuffer();
+  assert.equal(method,'PATCH');
+  assert.equal(req.headers.get('apikey'),null);
+  const payload=await signaturePayload(timestamp,method,resource,headers,body);
+  assert.equal(await crypto.subtle.verify('Ed25519',publicVerification,signature,payload),true);
+  const modified=await signaturePayload(timestamp,method,resource,headers,new Uint8Array([0]));
+  assert.equal(await crypto.subtle.verify('Ed25519',publicVerification,signature,modified),false);
+  return Response.json([]);
+ });
+ await assert.rejects(fetcher(project+'/rest/v1/other_table'),/授权范围/);
+ await assert.rejects(fetcher('https://outside.test/rest/v1/qizhi_records'),/授权范围/);
+ await assert.rejects(fetcher(project+'/storage/v1/object/another-bucket/cloud/team-originals/a'),/授权范围/);
+ const result=await fetcher(project+'/rest/v1/qizhi_records?key=eq.test',{method:'PATCH',body:'{"test":true}'});
+ assert.equal(result.status,200);
+});

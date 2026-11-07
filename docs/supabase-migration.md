@@ -14,6 +14,8 @@ Render 负责网站 API 和 PPTMaster 执行，Supabase 保存 JSON 记录和私
    | `SUPABASE_URL` | 目标 Supabase 项目的 Project URL |
    | `SUPABASE_SECRET_KEY` | 目标 Supabase 项目的服务端 Secret key |
 
+   若部署了仓库中的 `qizhi-storage` 函数，也可使用匹配的 `SUPABASE_STORAGE_SIGNING_KEY` 和 `SUPABASE_PUBLISHABLE_KEY` 代替 `SUPABASE_SECRET_KEY`。签名私钥只放入服务端配置。函数的公钥必须与该私钥匹配，函数权限仅覆盖项目记录表和私有文件桶。
+
 3. 检查源库读取权限。命令只显示各类记录的数量。
 
    ```sh
@@ -26,11 +28,11 @@ Render 负责网站 API 和 PPTMaster 执行，Supabase 保存 JSON 记录和私
    node --env-file=.env.migration scripts/migrate-netlify.mjs --copy
    ```
 
-   同一快照的部分导入可重试。若新旧同名记录的内容已不同，脚本会停止。保留两边的数据，检查差异后再继续。
+   同一快照的部分导入可重试。若新旧同名记录的内容已不同，脚本会停止。保留两边的数据，检查差异后再继续。切换前可运行 `--verify` 再次检查旧站数据与导入快照是否一致。
 
 ## 切换正式服务
 
-1. 在 Render 网站服务的 Environment 设置 `SUPABASE_URL`、`SUPABASE_SECRET_KEY` 和 `USER_MODEL_VAULT_SECRET`。保留原个人 DeepSeek 绑定需要使用旧 Netlify 部署实际使用的保险箱密钥（`USER_MODEL_VAULT_SECRET`，或旧部署用于兼容的 `LLM_API_KEY`）。在目标项目中有已绑定的账号时，先用实际账号验证该配置。找不到旧保险箱密钥时，需先安排用户重新绑定。
+1. 在 Render 网站服务的 Environment 设置 `SUPABASE_URL`、`SUPABASE_SECRET_KEY` 和 `USER_MODEL_VAULT_SECRET`。保留原个人 DeepSeek 绑定需要使用旧 Netlify 部署实际使用的保险箱密钥（`USER_MODEL_VAULT_SECRET`，或旧部署用于兼容的 `LLM_API_KEY`）。在目标项目中有已绑定的账号时，先用实际账号验证该配置。找不到旧保险箱密钥时，生成新的随机保险箱密钥并通知受影响账号。账号页会提示重新绑定 DeepSeek，用户确认新绑定之前保留旧密文。
 2. 设 `QIZHI_DATA_BACKEND=supabase`，先维持停写并重新部署 Render 网站。检查 `/healthz` 和 `/api/status`，确认正式 API 能从新库读取现有账号、教案和教研组。
 3. 将 PPTMaster 服务的 `QIZHI_ORIGIN` 设为 `https://qizhi-learning-lab.onrender.com` 并重新部署。等待服务通过健康检查，再移除网站的停写配置并部署。
 4. 验证登录、教案同步、共享原件上传与下载、删除权限、模型测试，以及 PPT 任务生成、预览和下载。网站开始接收新写入后，以新库为准。回退前先同步新增的数据。

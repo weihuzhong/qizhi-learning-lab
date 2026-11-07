@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {createClient} from '@supabase/supabase-js';
+import {createStorageFetch} from './supabase-storage-fetch.js';
 
 const table='qizhi_records';
 const bucket='qizhi-private-files';
@@ -22,15 +23,19 @@ function missing(error){
  return Number(error?.status??error?.statusCode)===404;
 }
 
-export function createSupabaseStores({SUPABASE_URL:url,SUPABASE_SECRET_KEY:secret},fetcher=fetch){
- if(!url||!secret||!secret.startsWith('sb_secret_'))throw Error('需要配置 Supabase 项目网址和服务端密钥');
+export function createSupabaseStores({
+ SUPABASE_URL:url,SUPABASE_SECRET_KEY:secret,SUPABASE_STORAGE_SIGNING_KEY:signingKey,SUPABASE_PUBLISHABLE_KEY:publishable,
+},fetcher=fetch){
+ const apiKey=signingKey?publishable:secret;
+ if(!url||!apiKey?.startsWith(signingKey?'sb_publishable_':'sb_secret_'))throw Error('需要配置 Supabase 项目网址和服务端认证');
  const endpoint=new URL(url);
  if(endpoint.protocol!=='https:'||!/^[-a-z0-9]+\.supabase\.co$/.test(endpoint.hostname)||endpoint.origin!==url.replace(/\/$/,'')){
   throw Error('Supabase 项目网址无效');
  }
- const client=createClient(endpoint.origin,secret,{
+ const storageFetch=signingKey?createStorageFetch(endpoint,signingKey,fetcher):fetcher;
+ const client=createClient(endpoint.origin,apiKey,{
   auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
-  global:{fetch:(input,options)=>fetcher(input,{...options,redirect:'error',signal:AbortSignal.timeout(30000)})},
+  global:{fetch:(input,options)=>storageFetch(input,{...options,redirect:'error',signal:AbortSignal.timeout(30000)})},
  });
  const files=client.storage.from(bucket);
  function createStore(namespace){
