@@ -41,8 +41,18 @@ function illustration(topic,profile,n,kind){
     text(label,940,y+37,26,index===n%3?'#FFFFFF':profile.ink,true);
   }).join('');
  }
+ if(profile===profiles.middle){
+  const labels=/实验|科学|纸桥|观察|沉浮|物理|化学/.test(topic)?['比较条件','观察记录','解释结果']:['概念','联系','应用'];
+  return base+line(912,309,912,506,accent,5)+labels.map((label,index)=>{
+   const y=283+index*86;
+   return circle(912,y+28,9,index===n%3?pop:accent)+rect(934,y,220,56,profile.paper,6)+
+    text(label,950,y+37,25,profile.ink,true);
+  }).join('');
+ }
  if(/纸桥/.test(topic)&&kind!=='ending'){
-  return base+rect(903,423,54,78,accent,4)+rect(1102,423,54,78,accent,4)+
+  const scenery=profile===profiles.young?circle(945,320,26,pop)+circle(1118,315,13,profile.paper)+
+   circle(1137,319,15,profile.paper)+rect(1105,320,48,9,profile.paper,4):'';
+  return base+scenery+rect(903,423,54,78,accent,4)+rect(1102,423,54,78,accent,4)+
    '<polygon points="911,413 946,387 1114,387 1148,413 1148,431 911,431" fill="'+pop+'"/>'+
    line(954,413,1105,413,accent,4)+circle(1029,356,21,accent);
  }
@@ -72,31 +82,34 @@ function illustration(topic,profile,n,kind){
 
 export function classroomPage(job,number){
  const {lesson,count}=job,profile=classroomProfile(job.brief);
+ const young=profile===profiles.young;
  const phaseIndex=number>2&&number<count?Math.min(lesson.phases.length-1,Math.floor((number-3)*lesson.phases.length/Math.max(1,count-3))):0;
  const phase=lesson.phases[phaseIndex];
  const compact=count===4&&number===3;
  const selected=compact?lesson.phases.map(p=>p.name+'：'+p.student):[phase?.student,phase?.check].filter(Boolean);
  const cover=number===1,last=number===count,goals=number===2;
  const kind=cover?'cover':last?'ending':'content';
- const title=cover?lesson.title:last?'回顾与练习':goals?'这节课要学什么':compact?'课堂活动':phase?.name||'课堂活动';
+ const title=cover?lesson.title:last?(young?'说一说，试一试':'回顾与练习'):goals?(young?'今天要做什么':'这节课要学什么'):compact?'课堂活动':phase?.name||'课堂活动';
  const entries=cover?lesson.objectives.slice(0,1):last?[...(lesson.assessment||[]),...(lesson.homework||[])]:goals?lesson.objectives:selected;
  const detail=entries.map(clean).filter(Boolean);
  const titleLines=lines(title,22,2);
- const body=detail.slice(0,3).flatMap((item,i)=>lines((detail.length>1?(i+1)+'  ':'')+item,profile.body===36?18:21,2));
+ const body=detail.slice(0,3).flatMap((item,i)=>lines((detail.length>1?(i+1)+'  ':'')+item,young?16:21,2));
  const note=[lesson.title+' · '+title,
   ...(cover||goals?lesson.objectives:last?[...lesson.assessment,...lesson.homework]:
    compact?lesson.phases.map(p=>p.name+'：'+p.teacher+'；'+p.student+'；'+p.check):
    [phase?.teacher,phase?.student,phase?.check]),'请根据教材和学生实际情况核对后使用。'].filter(Boolean).join('\n');
  const heading=text((clean(job.brief?.grade).slice(0,24)||profile.label)+'课堂',90,75,24,profile.accent,true)+
   titleLines.map((item,i)=>text(item,90,132+i*49,44,profile.ink,true)).join('');
- const content=rect(82,242,746,334,profile.wash,24)+
-  text(cover?'今天的任务':last?'想一想，做一做':goals?'学习目标':'观察与行动',112,296,24,profile.accent,true)+
-  body.map((item,i)=>text(item,112,350+i*39,profile.body,profile.ink)).join('');
+ const contentX=young?532:82,textX=contentX+28;
+ const content=rect(contentX,242,young?656:746,334,profile.wash,24)+
+  text(cover?'今天的任务':last?'想一想，做一做':goals?'学习目标':'观察与行动',textX,296,24,profile.accent,true)+
+  body.map((item,i)=>text(item,textX,350+i*39,profile.body,profile.ink)).join('');
  const visual=illustration(lesson.title+' '+(job.brief?.subject||''),profile,number,kind);
  const footer=text('启知未来  ·  课堂初稿',90,664,20,profile.accent)+text(number+' / '+count,1098,664,20,profile.accent);
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="${kind}" font-family="Microsoft YaHei">`+
   rect(0,0,1280,720,profile.paper)+group('heading','64 38 1152 167',heading)+
-  group('content','64 224 784 370',content)+group('visual','854 224 352 370',visual)+
+  (young?group('visual','64 224 444 386','<g transform="translate(-1010 -47) scale(1.25 1.12)">'+visual+'</g>')+
+   group('content','516 224 690 386',content):group('content','64 224 784 370',content)+group('visual','854 224 352 370',visual))+
   group('footer','64 620 1152 74',footer)+'</svg>';
  return {number,svg,notes:note.slice(0,1500)};
 }
