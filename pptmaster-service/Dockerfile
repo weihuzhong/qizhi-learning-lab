@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir python-pptx==1.0.2 PyYAML==6.0.3 XlsxWriter==3.2.
 RUN git clone --filter=blob:none https://github.com/pn1024/dsh-ppt-master.git /opt/pptmaster && cd /opt/pptmaster && git checkout 3c956467cd053fec36816cb7d2ca973729a5d4d1 && python3 /opt/pptmaster/skills/ppt-master/scripts/attribution_guard.py
 RUN useradd --create-home --uid 10001 executor
 WORKDIR /app
-COPY worker.mjs overflow.mjs verify-render.py repair-layout.py ./
+COPY worker.mjs overflow.mjs classroom-draft.mjs verify-render.py repair-layout.py ./
 COPY fonts.conf /etc/fonts/conf.d/99-qizhi-cjk.conf
 RUN fc-cache -f && fc-match -f "%{family}" "Microsoft YaHei" | python3 -c "import sys; assert 'Noto Sans CJK SC' in sys.stdin.read(), 'Chinese preview font alias missing'"
 USER executor

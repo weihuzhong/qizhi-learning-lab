@@ -53,7 +53,7 @@ export function createOverflow({base,origin,directory}){
   }
   let input;
   try{input=JSON.parse(Buffer.concat(parts));}catch{reject('请求格式无效',400);}
-  const {lesson,brief={}}=input||{};
+  const {lesson,brief={}}=input||{},mode=input?.mode==='basic'?'basic':'direct';
   const count=Number(input?.count),style=String(input?.style||'现代课堂演示，清晰、图解优先').slice(0,1500);
   if(!lesson||typeof lesson.title!=='string'||!lesson.title.trim()||lesson.title.length>160||
     !Array.isArray(lesson.phases)||lesson.phases.length<2||lesson.phases.length>10||
@@ -66,9 +66,11 @@ export function createOverflow({base,origin,directory}){
      ['name','teacher','student','check'].some(key=>typeof phase[key]!=='string'||phase[key].length>2000))||
     lesson.phases.reduce((sum,phase)=>sum+phase.minutes,0)>120)reject('教案字段或课时分配无效',400);
   if(!Number.isInteger(count)||count<4||count>20)reject('课件页数须为4至20',400);
-  const fingerprint=digest(JSON.stringify({lesson,brief,count,style}));
-  const {configured}=await backend('/api/status',account.session);
-  if(!configured)reject('请先在账号页绑定自己的DeepSeek API密钥',428);
+  const fingerprint=digest(JSON.stringify({lesson,brief,count,style,mode}));
+  if(mode==='direct'){
+   const {configured}=await backend('/api/status',account.session);
+   if(!configured)reject('AI 精细设计需绑定个人 DeepSeek 密钥，也可以选择课堂初稿',428);
+  }
   await clearExpired();
   const active=[...jobs.values()].filter(j=>['queued','running'].includes(j.status));
   const sameAccount=active.find(j=>j.userId===account.userId);
@@ -79,9 +81,9 @@ export function createOverflow({base,origin,directory}){
   if(active.length>=8)reject('备用队列暂满，请稍后再试',503);
   const now=Date.now();
   const id='r-'+randomBytes(16).toString('hex');
-  const job={...account,id,runId:randomBytes(12).toString('hex'),lesson,brief,count,style,
+  const job={...account,id,runId:randomBytes(12).toString('hex'),lesson,brief,count,style,mode,
    title:lesson.title,fingerprint,createdAt:now,updatedAt:now,status:'queued',error:null,result:null,calls:0,
-   progress:{phase:'queued',pages:0,message:'已进入备用队列，等待后台接单'}};
+   progress:{phase:'queued',pages:0,message:'已提交，等待 PPTMaster 后台接单'}};
   jobs.set(id,job);
   return publicJob(job);
  }

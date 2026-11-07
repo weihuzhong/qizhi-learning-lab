@@ -6,11 +6,12 @@ import {spawn} from 'node:child_process';
 import {sign,createHash,generateKeyPairSync,createPublicKey} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {createOverflow} from './overflow.mjs';
+import {classroomPage,classroomProfile} from './classroom-draft.mjs';
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const RUNNER_REVISION='quick-overflow-queue-1';
+const RUNNER_REVISION='classroom-draft-recovery-1';
 const overflow=createOverflow({base:BASE,origin:'https://qizhi-learning-lab.onrender.com',
  directory:path.join(os.tmpdir(),'qizhi-overflow-jobs')});
 const draftDirectory=path.join(os.tmpdir(),'qizhi-ppt-drafts');
@@ -223,7 +224,7 @@ async function executeJob(job){
   return result;
  };
  const model=async(tool,messages)=>{
-  if(Date.now()-start>45*60000)throw Error('课件后台处理超过时限，请重新提交');
+  if(Date.now()-start>5*60000)throw Error('课件后台处理超过时限，请重新提交');
   modelTurns++;
   return parseOutput(await call('model',{...auth,messages,tools:[tool]}),tool.function.name);
  };
@@ -247,7 +248,22 @@ async function executeJob(job){
     asset={href:'../images/paper-bridge.jpg',description:'可选纸桥示意图，为AI生成素材，仅供情境导入，不能描述为真实课堂或实验数据。'};
    }
   }
-  const brief={lesson:job.lesson,brief:job.brief,style:job.style,count:job.count,asset};
+  const audience=classroomProfile(job.brief);
+  const brief={lesson:job.lesson,brief:job.brief,style:job.style,count:job.count,asset,
+   audience:audience.label,ageDesignRequirements:audience.guide};
+  let draftReason='';
+  async function writeFallback(reason){
+   draftReason=reason;
+   await progress('designing','正在使用教案生成可编辑课堂初稿');
+   for(let number=1;number<=job.count;number++){
+    const page=classroomPage(job,number);
+    await writeFile(path.join(svgDir,pageFile(number)),page.svg,'utf8');
+    drafts.set(number,page);
+   }
+   await run('svg_quality_checker.py',[project,'--quick-generate','--canonical-authoring','--stage','final','--json'],'基础课件未通过技术校验');
+  }
+  if(job.mode==='basic')await writeFallback('按教案和适龄图解生成，请教师核对教学内容。');
+  else try{
   const planning=await readAuthority([
    'references/canvas-formats.md','references/modes/_index.md','references/visual-styles/_index.md',
    'references/image-renderings/_index.md','templates/icons/README.md',
@@ -384,8 +400,6 @@ async function executeJob(job){
    }
   }
 
-  const pptx=path.join(project,'deck.pptx');
-  const orderedDrafts=()=>[...drafts.values()].sort((a,b)=>a.number-b.number);
   await progress('checking','正在检查整稿版式和可编辑性');
   let issues=await normalizeLayout(await checkQuality());
   if(issues.length){
@@ -404,6 +418,13 @@ async function executeJob(job){
    if(issues.length)throw Error('第 '+[...new Set(issues.map(issue=>issue.slide))].join('、')+' 页的版式无法通过技术校验，暂无法导出完整PPTX。教案已保留');
   }
 
+  }catch(error){
+   if(error.status===409)throw error;
+   await writeFallback('AI 设计未能交付完整课件，已按教案生成课堂初稿。'+
+    (error.providerStatus||error instanceof PageOutputError?' 原因：'+String(error.message).slice(0,160):''));
+  }
+  const pptx=path.join(project,'deck.pptx');
+  const orderedDrafts=()=>[...drafts.values()].sort((a,b)=>a.number-b.number);
   const notesDir=path.join(project,'notes');
   await mkdir(notesDir,{recursive:true});
   async function exportDeck(destination,reviewIssues=[]){
@@ -425,7 +446,7 @@ async function executeJob(job){
   await progress('checking','PPT 已导出，正在整理逐页复核建议');
   const slides=checked.pages.map((page,i)=>({number:i+1,text:page.text}));
   let contentReview=null;
-  for(let attempt=0;attempt<2;attempt++){
+  for(let attempt=0;!draftReason&&attempt<2;attempt++){
    try{
     reviewTurns++;
     contentReview=await call('review',{...auth,slides});
@@ -455,15 +476,15 @@ async function executeJob(job){
   await progress('rendering',isDraft?'正在准备初稿预览和复核建议':'课件已通过检查，正在生成逐页预览');
   const rendered=await run('verify-render.py',verifyArgs,'成稿预览生成失败');
   const result=JSON.parse(rendered.stdout);
-  const summary=isDraft?'已生成 '+result.count+' 页可编辑初稿。'+
+  const summary=draftReason|| (isDraft?'已生成 '+result.count+' 页可编辑初稿。'+
    (review.status==='flagged'?'请按逐页建议核对后使用。':'内容复核暂未完成，请人工核对。'):
-   '已完成 '+result.count+' 页可编辑课件，含逐页预览与教师备注。';
-  const audit={contentReview,review,engine:'ppt-master',sourceCommit:COMMIT,model:'DeepSeek',
+   '已完成 '+result.count+' 页可编辑课件，含逐页预览与教师备注。');
+  const audit={contentReview,review,engine:'ppt-master',sourceCommit:COMMIT,model:modelTurns?'DeepSeek':null,audience:audience.label,draftReason,
    actualCount:result.count,commands:calls,summary,elapsedSeconds:Math.round((Date.now()-start)/1000),
    queueSeconds:Math.max(0,Math.round((start-(job.createdAt||start))/1000)),modelTurns,reviewTurns,runnerRevision:RUNNER_REVISION};
   const published={engine:'ppt-master',sourceCommit:COMMIT,actualCount:result.count,
    pages:result.pages.map((page,i)=>({number:i+1,title:page.title,preview:'page-'+pageNumber(i+1)+'.png'})),
-   quality:isDraft?'draft':'final',review,summary,elapsedSeconds:audit.elapsedSeconds};
+   quality:isDraft?'draft':'final',review,summary,audience:audience.label,elapsedSeconds:audit.elapsedSeconds};
   const auditFile=path.join(project,'audit.json');
   await writeFile(auditFile,JSON.stringify(audit,null,2));
   const deliverables=[['deck.pptx',pptx],['audit.json',auditFile],

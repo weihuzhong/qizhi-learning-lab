@@ -4,6 +4,7 @@ import {randomBytes,scrypt as rawScrypt,timingSafeEqual,createHash} from 'node:c
 import {promisify} from 'node:util';
 import {validateOutline,validatePhase} from '../worker/staged-api.js';
 import {validateLesson} from '../worker/teaching-api.js';
+import {createTeamOriginals,originalInfo} from './team-originals.js';
 const scrypt=promisify(rawScrypt),hash=s=>createHash('sha256').update(s).digest('hex');
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 const str=(s,n=300)=>String(s??'').trim().slice(0,n);
@@ -12,6 +13,7 @@ const cleanUser=u=>({id:u.id,name:u.name,username:u.username});
 export async function readCloudSession(store,req){const token=req.headers.get('cookie')?.match(/(?:^|;\s*)qizhi_session=([a-f0-9]{64})(?:;|$)/)?.[1];if(!token)return null;const s=await store.get('sessions/'+hash(token),{type:'json'});if(!s||s.expires<Date.now())return null;const user=await store.get('users/'+s.userId,{type:'json'});return user?{user,token}:null;}
 export function createCloudApi(store){
  const get=key=>store.get(key,{type:'json'});
+ const originals=createTeamOriginals(store);
  async function update(key,fn){for(let n=0;n<5;n++){const old=await store.getWithMetadata(key,{type:'json'});const data=await fn(old?.data??null);const r=await store.setJSON(key,data,old?{onlyIfMatch:old.etag}:{onlyIfNew:true});if(r.modified)return data;}fail('多人同时操作，请刷新后重试',409);}
  async function throttle(ip,kind,limit){const key='rate/'+kind+'/'+hash(ip).slice(0,32)+'/'+Math.floor(Date.now()/600000);await update(key,old=>{if((old?.count||0)>=limit)fail('请求频繁，请10分钟后再试',429);return {count:(old?.count||0)+1};});}
  const session=req=>readCloudSession(store,req);
@@ -22,7 +24,7 @@ export function createCloudApi(store){
  return async(req)=>{
  const reply=(data,status=200,extra={})=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff',...extra}});
  try{
- const path=new URL(req.url).pathname,ip=req.headers.get('x-nf-client-connection-ip')||'unknown';
+ const url=new URL(req.url),path=url.pathname,ip=req.headers.get('x-nf-client-connection-ip')||'unknown';
  if(req.method==='POST'&&req.headers.get('origin')!==new URL(req.url).origin)fail('来源不匹配',403);
  const b=req.method==='POST'?await req.json():{};
  if(path==='/api/cloud/register'||path==='/api/cloud/login'){
@@ -43,6 +45,14 @@ export function createCloudApi(store){
  const p=await update(profileKey(u.id),old=>{if((old?.version||0)!==b.version)fail('云端已有新版本。请先载入云端内容，避免覆盖其他设备的修改。',409);return {version:(old?.version||0)+1,lessons:data.lessons,preferences:data.preferences,schedule:data.schedule,workspace:data.workspace||null,updatedAt:new Date().toISOString()};});return reply({profile:p});
  }
  if(path==='/api/cloud/teams'){const ids=await get('links/'+u.id)||[];const teams=[];for(const id of ids){const w=await get('teams/'+id);if(w?.members.some(m=>m.id===u.id))teams.push({id:w.id,name:w.name,role:w.owner===u.id?'leader':'teacher'});}return reply({teams});}
+ if(path==='/api/cloud/team/document/file'&&req.method==='GET'){
+  const w=await workspace(url.searchParams.get('team'),u);
+  const item=(w.documents||[]).find(d=>d.id===url.searchParams.get('document'));
+  if(!item)fail('共享文档不存在',404);
+  const index=url.searchParams.get('index');
+  if(!/^\d{1,2}$/.test(index||''))fail('文件分段编号无效');
+  return await originals.read(w.id,item,Number(index));
+ }
  if(req.method!=='POST')fail('请使用POST',405);await throttle(ip,'write',120);
  if(path==='/api/cloud/team/create'){
  const ids=await get('links/'+u.id)||[];if(ids.length>=15)fail('最多加入15个工作组');const id=randomBytes(12).toString('hex'),secret=randomBytes(16).toString('hex');const w={id,name:str(b.name,80)||'协同教研组',owner:u.id,members:[{id:u.id,name:u.name}],lessons:[],messages:[],inviteHash:hash(secret),updatedAt:new Date().toISOString()};await store.setJSON('teams/'+id,w,{onlyIfNew:true});await links(u.id,id);return reply({team:publicTeam(w,u),invite:id+'.'+secret});
@@ -52,16 +62,43 @@ export function createCloudApi(store){
  }
  if(path==='/api/cloud/team/get'){const w=await workspace(b.id,u);return reply({team:publicTeam(w,u)});}
  if(path==='/api/cloud/team/invite'){const old=await workspace(b.id,u);if(old.owner!==u.id)fail('仅组长可更新邀请码',403);const secret=randomBytes(16).toString('hex');await update('teams/'+b.id,w=>({...w,inviteHash:hash(secret)}));return reply({invite:b.id+'.'+secret});}
- if(['/api/cloud/team/publish','/api/cloud/team/message','/api/cloud/team/remove','/api/cloud/team/document'].includes(path)){
- await workspace(b.id,u);const w=await update('teams/'+b.id,w=>{
+ if(path==='/api/cloud/team/document/chunk'||path==='/api/cloud/team/document/abort'){
+  const w=await workspace(b.id,u);
+  if(path.endsWith('/chunk'))await originals.put(w.id,u.id,b);
+  else{
+   const file=originalInfo(b.original);
+   if(!(w.documents||[]).some(d=>d.original?.id===file.id&&d.authorId===u.id))await originals.remove(w.id,u.id,file);
+  }
+  return reply({ok:true});
+ }
+ if(['/api/cloud/team/publish','/api/cloud/team/message','/api/cloud/team/remove','/api/cloud/team/document','/api/cloud/team/document/remove'].includes(path)){
+ await workspace(b.id,u);
+ const original=path==='/api/cloud/team/document'&&b.original?await originals.complete(b.id,u.id,b.original):null;
+ let removed;
+ const w=await update('teams/'+b.id,w=>{
  if(!w?.members.some(m=>m.id===u.id))fail('无访问权限',403);
- if(path.endsWith('document')){if(typeof b.text!=='string'||!b.text.trim()||b.text.length>18000)fail('文档正文无效');validateInput(()=>validateDocumentReview(b.report,b.text));w.documents ||= [];if(w.documents.length>=30)fail('最多保存30份教研文档');w.documents.unshift({id:randomBytes(12).toString('hex'),name:str(b.name,160),text:b.text,report:b.report,author:u.name,authorId:u.id,createdAt:new Date().toISOString()});}
+ if(path==='/api/cloud/team/document/remove'){
+  removed=(w.documents||[]).find(d=>d.id===b.documentId);
+  if(!removed)fail('共享文档不存在',404);
+  if(removed.authorId!==u.id&&w.owner!==u.id)fail('仅上传者或组长可删除共享文档',403);
+  w.documents=w.documents.filter(d=>d.id!==removed.id);
+ }
+ else if(path.endsWith('document')){
+  if(typeof b.text!=='string'||(!original&&!b.text.trim())||b.text.length>18000)fail('文档正文无效');
+  if(b.report)validateInput(()=>validateDocumentReview(b.report,b.text));
+  w.documents ||= [];
+  if(original&&w.documents.some(d=>d.original?.id===original.id&&d.authorId===u.id))return w;
+  if(w.documents.length>=30)fail('最多保存30份教研文档');
+  w.documents.unshift({id:randomBytes(12).toString('hex'),name:original?.name||str(b.name,160),text:b.text,report:b.report||null,original,author:u.name,authorId:u.id,createdAt:new Date().toISOString()});
+ }
  else if(path.endsWith('publish')){
  const items=b.items;if(!Array.isArray(items)||!items.length||items.length>20||w.lessons.length+items.length>40)fail('一次可提交1至20份，组内最多40份教案，请归档后再上传');
  for(const item of items){validateInput(()=>validateLesson(item.lesson));if(JSON.stringify(item).length>70000)fail('单份备课包过大');const brief=Object.fromEntries(['topic','grade','subject','minutes','prior','resources','learners','context','requirements'].map(k=>[k,k==='minutes'?Number(item.brief?.[k])||40:str(item.brief?.[k],1800)]));w.lessons.unshift({id:randomBytes(12).toString('hex'),authorId:u.id,author:u.name,lesson:item.lesson,brief,createdAt:new Date().toISOString(),source:str(item.source,120)});}
  }else if(path.endsWith('remove')){const item=w.lessons.find(x=>x.id===b.lessonId);if(!item)fail('教案不存在',404);if(item.authorId!==u.id&&w.owner!==u.id)fail('仅作者或组长可移除教案',403);w.lessons=w.lessons.filter(x=>x.id!==b.lessonId);}
  else {const text=str(b.text,1500);if(!text)fail('讨论内容不能为空');if(b.lessonId&&!w.lessons.some(x=>x.id===b.lessonId))fail('关联教案不存在');w.messages.push({id:randomBytes(12).toString('hex'),author:u.name,authorId:u.id,text,lessonId:str(b.lessonId,24),createdAt:new Date().toISOString()});w.messages=w.messages.slice(-150);}
- w.updatedAt=new Date().toISOString();if(JSON.stringify(w).length>2800000)fail('工作组容量已满，请归档旧教案');return w;});return reply({team:publicTeam(w,u)});
+ w.updatedAt=new Date().toISOString();if(JSON.stringify(w).length>2800000)fail('工作组容量已满，请删除旧文档或教案');return w;});
+ if(removed)await originals.remove(w.id,removed.authorId,removed.original);
+ return reply({team:publicTeam(w,u)});
  }
  fail('接口不存在',404);
  }catch(e){return reply({error:e.status?e.message:'云端服务暂不可用，当前浏览器内容仍保留。请稍后重试。'},e.status||503);}
