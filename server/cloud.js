@@ -4,7 +4,7 @@ import {randomBytes,scrypt as rawScrypt,timingSafeEqual,createHash} from 'node:c
 import {promisify} from 'node:util';
 import {validateOutline,validatePhase} from '../worker/staged-api.js';
 import {validateLesson} from '../worker/teaching-api.js';
-import {createTeamOriginals,originalInfo} from './team-originals.js';
+import {createTeamOriginals,originalInfo,originalUploader} from './team-originals.js';
 const scrypt=promisify(rawScrypt),hash=s=>createHash('sha256').update(s).digest('hex');
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 const str=(s,n=300)=>String(s??'').trim().slice(0,n);
@@ -20,6 +20,16 @@ export function createCloudApi(store){
  const profileKey=id=>'profiles/'+id;
  async function links(id,workspace){return update('links/'+id,old=>[...new Set([...(old||[]),workspace])].slice(-15));}
  async function workspace(id,u){if(!/^[a-f0-9]{24}$/.test(id||''))fail('工作组编号无效');const w=await get('teams/'+id);if(!w||!w.members.some(m=>m.id===u.id))fail('没有此工作组的访问权限',403);return w;}
+ function documentToAttach(w,id,u,original){
+  if(!w?.members.some(m=>m.id===u.id))fail('没有此工作组的访问权限',403);
+  const item=(w.documents||[]).find(d=>d.id===id);
+  if(!item)fail('共享文档不存在',404);
+  if(item.authorId!==u.id&&w.owner!==u.id)fail('仅上传者或组长可补传原件',403);
+  if(item.original&&(item.original.id!==original.id||originalUploader(item)!==u.id))fail('这条记录已有原件，请刷新后下载',409);
+  if(item.name.normalize('NFC').toLowerCase()!==original.name.normalize('NFC').toLowerCase())fail('请选择与共享记录同名的原件');
+  if(w.documents.some(d=>d.id!==id&&d.original?.id===original.id&&originalUploader(d)===u.id))fail('该附件已用于另一条记录',409);
+  return item;
+ }
  const publicTeam=(w,u)=>{const {inviteHash,...rest}=w;return {...rest,role:w.owner===u.id?'leader':'teacher'};};
  return async(req)=>{
  const reply=(data,status=200,extra={})=>Response.json(data,{status,headers:{'cache-control':'no-store','x-content-type-options':'nosniff',...extra}});
@@ -49,6 +59,8 @@ export function createCloudApi(store){
   const w=await workspace(url.searchParams.get('team'),u);
   const item=(w.documents||[]).find(d=>d.id===url.searchParams.get('document'));
   if(!item)fail('共享文档不存在',404);
+  const view=url.searchParams.get('view');
+  if(view==='download'||view==='preview')return await originals.open(w.id,item,view);
   const index=url.searchParams.get('index');
   if(!/^\d{1,2}$/.test(index||''))fail('文件分段编号无效');
   return await originals.read(w.id,item,Number(index));
@@ -67,9 +79,24 @@ export function createCloudApi(store){
   if(path.endsWith('/chunk'))await originals.put(w.id,u.id,b);
   else{
    const file=originalInfo(b.original);
-   if(!(w.documents||[]).some(d=>d.original?.id===file.id&&d.authorId===u.id))await originals.remove(w.id,u.id,file);
+   if(!(w.documents||[]).some(d=>d.original?.id===file.id&&originalUploader(d)===u.id))await originals.remove(w.id,u.id,file);
   }
   return reply({ok:true});
+ }
+ if(path==='/api/cloud/team/document/attach'){
+  const current=await workspace(b.id,u),descriptor=originalInfo(b.original);
+  const item=documentToAttach(current,b.documentId,u,descriptor);
+  if(item.original)return reply({team:publicTeam(current,u)});
+  const original=await originals.complete(current.id,u.id,descriptor);
+  const w=await update('teams/'+current.id,w=>{
+   const item=documentToAttach(w,b.documentId,u,original);
+   if(!item.original){
+    item.original={...original,uploadedBy:u.id};
+    w.updatedAt=new Date().toISOString();
+   }
+   return w;
+  });
+  return reply({team:publicTeam(w,u)});
  }
  if(['/api/cloud/team/publish','/api/cloud/team/message','/api/cloud/team/remove','/api/cloud/team/document','/api/cloud/team/document/remove'].includes(path)){
  await workspace(b.id,u);
@@ -87,7 +114,7 @@ export function createCloudApi(store){
   if(typeof b.text!=='string'||(!original&&!b.text.trim())||b.text.length>18000)fail('文档正文无效');
   if(b.report)validateInput(()=>validateDocumentReview(b.report,b.text));
   w.documents ||= [];
-  if(original&&w.documents.some(d=>d.original?.id===original.id&&d.authorId===u.id))return w;
+  if(original&&w.documents.some(d=>d.original?.id===original.id&&originalUploader(d)===u.id))return w;
   if(w.documents.length>=30)fail('最多保存30份教研文档');
   w.documents.unshift({id:randomBytes(12).toString('hex'),name:original?.name||str(b.name,160),text:b.text,report:b.report||null,original,author:u.name,authorId:u.id,createdAt:new Date().toISOString()});
  }
@@ -97,7 +124,7 @@ export function createCloudApi(store){
  }else if(path.endsWith('remove')){const item=w.lessons.find(x=>x.id===b.lessonId);if(!item)fail('教案不存在',404);if(item.authorId!==u.id&&w.owner!==u.id)fail('仅作者或组长可移除教案',403);w.lessons=w.lessons.filter(x=>x.id!==b.lessonId);}
  else {const text=str(b.text,1500);if(!text)fail('讨论内容不能为空');if(b.lessonId&&!w.lessons.some(x=>x.id===b.lessonId))fail('关联教案不存在');w.messages.push({id:randomBytes(12).toString('hex'),author:u.name,authorId:u.id,text,lessonId:str(b.lessonId,24),createdAt:new Date().toISOString()});w.messages=w.messages.slice(-150);}
  w.updatedAt=new Date().toISOString();if(JSON.stringify(w).length>2800000)fail('工作组容量已满，请删除旧文档或教案');return w;});
- if(removed)await originals.remove(w.id,removed.authorId,removed.original);
+ if(removed)await originals.remove(w.id,originalUploader(removed),removed.original);
  return reply({team:publicTeam(w,u)});
  }
  fail('接口不存在',404);

@@ -162,10 +162,14 @@ async function forwardApi(req, res, url) {
     }
     return json(res, response.status, data);
   }
-  const output = { 'cache-control': draftFile || overflowJob ? 'private, no-store' : 'no-store', 'x-content-type-options': 'nosniff' };
+  const documentFile = url.pathname === '/api/cloud/team/document/file';
+  const output = { 'cache-control': draftFile || overflowJob || documentFile ? 'private, no-store' : 'no-store', 'x-content-type-options': 'nosniff' };
   for (const name of ['content-type', 'content-disposition']) {
     const value = response.headers.get(name);
     if (value) output[name] = value;
+  }
+  if (documentFile && localApi && response.headers.has('content-length')) {
+    output['content-length'] = response.headers.get('content-length');
   }
   const cookies = response.headers.getSetCookie()
     .filter(cookie => (cookie.startsWith('qizhi_session=') ||

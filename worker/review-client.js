@@ -34,16 +34,24 @@ async function shareDocument(id,document,file){
   body.report ||= {topic:document.name.slice(0,160),summary:'从原文件提取文字，待组内审阅。',strengths:[],risks:[],nextSteps:[]};
  }
  if(!file)return (await api('cloud/team/document',body)).team;
- const original={id:crypto.randomUUID().replaceAll('-',''),name:file.name||document.name,size:file.size};
+ return uploadTeamOriginal(id,file,async original=>(await api('cloud/team/document',{...body,original})).team);
+}
+async function uploadTeamOriginal(id,file,finish){
+ if(!file.size||file.size>30*1024*1024)throw Error('请选择不超过 30 MB 的原件');
+ const original={id:crypto.randomUUID().replaceAll('-',''),name:file.name,size:file.size};
+ let finalizing=false;
  try{
   for(let index=0;index*originalChunkBytes<file.size;index++){
    const start=index*originalChunkBytes,data=await chunkBase64(file.slice(start,start+originalChunkBytes));
    await api('cloud/team/document/chunk',{id,original,index,data});
   }
-  return (await api('cloud/team/document',{...body,original})).team;
+  finalizing=true;
+  return await finish(original);
  }catch(error){
-  // A completed publication is kept even if its HTTP response was lost.
-  await api('cloud/team/document/abort',{id,original}).catch(()=>{});
+  // A timed-out final request may still be attaching the file.
+  if(!finalizing||(error.status>=400&&error.status<500&&error.status!==408)){
+   await api('cloud/team/document/abort',{id,original}).catch(()=>{});
+  }
   throw error;
  }
 }
@@ -205,25 +213,54 @@ const docRender=render;render=function(){
  section.className='s2-card';
  section.innerHTML='<h3>共享文档与教研分析 · '+(team.documents||[]).length+'</h3>'+
  (originalFilesAvailable===false?'<p class="s2-muted">当前可分享和导入提取文字。原件共享与共享文档删除暂未开放。</p>':'')+
- (team.documents||[]).map(d=>'<details class="s2-file-row"><summary>'+esc(d.name)+' · '+esc(d.author)+'</summary>'+
- extractedText(d)+reportMarkup(d.report)+'<div class="s2-toolbar">'+
- (d.original?'<button class="btn small" data-shared-file="'+d.id+'">下载原文件</button>':
- '<small class="s2-muted">旧记录仅保存了提取文字。</small>')+
+ (team.documents||[]).map(d=>{
+  const url='/api/cloud/team/document/file?'+new URLSearchParams({team:team.id,document:d.id});
+  return '<details class="s2-file-row" data-shared-document="'+esc(d.id)+'"><summary>'+esc(d.name)+' · '+esc(d.author)+'</summary>'+
+ '<div class="s2-toolbar">'+
+ (d.original?'<a class="btn small primary" href="'+esc(url+'&view=download')+'" download>下载原件</a>'+
+  (/\.(?:pdf|png|jpe?g)$/i.test(d.original.name)?'<a class="btn small" href="'+esc(url+'&view=preview')+'" target="_blank" rel="noopener noreferrer">预览原件</a>':''):
+  '<small class="s2-muted">'+(canRemove(d)?'旧记录待补传原件。':'旧记录待补传原件，请联系上传者或组长。')+'</small>'+
+  (originalFilesAvailable!==false&&canRemove(d)?'<button class="btn small primary" data-attach-original="'+esc(d.id)+'">补传原件</button>'+
+    '<input type="file" hidden data-original-picker="'+esc(d.id)+'" accept="'+esc('.'+d.name.split('.').at(-1))+'">':''))+
  '<button class="btn small" data-copy-review="'+d.id+'">导入到文档教研</button>'+
  (originalFilesAvailable!==false&&canRemove(d)?'<button class="btn small" data-remove-document="'+d.id+'">删除共享文件</button>':'')+
- '</div></details>').join('')+
+ '</div>'+extractedText(d)+reportMarkup(d.report)+'</details>';
+ }).join('')+
  '<div class="s2-toolbar"><button class="btn" id="openDocumentDesk">导入教师现有文档</button></div>';
  $('content').appendChild(section);
  bindId('openDocumentDesk',()=>{go('review');$('documentFiles')?.click();});
- section.querySelectorAll('button[data-shared-file],button[data-copy-review]').forEach(b=>b.onclick=async()=>{
-  const id=b.dataset.sharedFile||b.dataset.copyReview,d=team.documents.find(x=>x.id===id);
+ section.querySelectorAll('button[data-copy-review]').forEach(b=>b.onclick=async()=>{
+  const d=team.documents.find(x=>x.id===b.dataset.copyReview);
   b.disabled=true;
   try{
    const file=d.original?await sharedOriginal(team.id,d):null;
-   if(b.dataset.sharedFile)exportBlob(file,file.name);
-   else{await saveLocalDocument(d,file);go('review');toast('已导入到文档教研');}
+   await saveLocalDocument(d,file);
+   go('review');toast('已导入到文档教研');
   }catch(e){toast(e.message);}
   finally{b.disabled=false;}
+ });
+ section.querySelectorAll('[data-attach-original]').forEach(b=>{
+  const d=team.documents.find(x=>x.id===b.dataset.attachOriginal);
+  const input=b.parentElement.querySelector('[data-original-picker]');
+  b.onclick=()=>input.click();
+  input.onchange=async()=>{
+   const file=input.files[0];
+   input.value='';
+   if(!file||cloud.busy)return;
+   if(file.name.normalize('NFC').toLowerCase()!==d.name.normalize('NFC').toLowerCase()){
+    return toast('请选择与这条记录同名的原件');
+   }
+   await cloudAction(async()=>{
+    const updated=await uploadTeamOriginal(team.id,file,async original=>
+     (await api('cloud/team/document/attach',{id:team.id,documentId:d.id,original})).team);
+    if(cloud.team?.id===team.id)cloud.team=updated;
+    toast('原件已补传，组员可以下载');
+   });
+   if(active==='online'&&cloud.team?.id===team.id){
+    const row=document.querySelector('[data-shared-document="'+CSS.escape(d.id)+'"]');
+    if(row)row.open=true;
+   }
+  };
  });
  section.querySelectorAll('[data-remove-document]').forEach(b=>b.onclick=()=>{
   const d=team.documents.find(x=>x.id===b.dataset.removeDocument);
