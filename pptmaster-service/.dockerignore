@@ -2,6 +2,7 @@
 !Dockerfile
 !worker.mjs
 !overflow.mjs
+!classroom-draft.mjs
 !verify-render.py
 !repair-layout.py
 !railway.json
