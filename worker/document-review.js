@@ -3,12 +3,12 @@ export function validateDocumentReview(report,text){
  for(const k of ['strengths','risks']){if(!Array.isArray(report[k])||report[k].length>5)throw Error('分析条目无效');for(const item of report[k]){if(typeof item.point!=='string'||item.point.length>500||typeof item.evidence!=='string'||!item.evidence.trim()||item.evidence.length>200||!text.replace(/\s+/g,'').includes(item.evidence.replace(/\s+/g,'')))throw Error('分析中的引文没有在原文中找到，请重新分析');if(k==='risks'&&(typeof item.suggestion!=='string'||item.suggestion.length>600))throw Error('改进建议无效');}}
  if(!Array.isArray(report.nextSteps)||report.nextSteps.length>5||report.nextSteps.some(x=>typeof x!=='string'||x.length>500))throw Error('后续建议无效');return report;
 }
-export async function extractTeachingFiles(files, unzip, { teachingPackages = false, keepOriginals = false } = {}) {
- const results = [], packages = [], errors = [];
+export async function extractTeachingFiles(files, unzip, { keepOriginals = false } = {}) {
+ const results = [], errors = [];
  const decoder = new TextDecoder();
  const MB = 1024 * 1024;
  let inputSize = 0, expandedSize = 0;
- const supported = keepOriginals?/\.(docx?|pptx?|xlsx?|txt|md|csv|pdf|png|jpe?g)$/i:/\.(docx|pptx|xlsx|txt|md|csv|json)$/i;
+ const supported = keepOriginals?/\.(docx?|pptx?|xlsx?|txt|md|csv|pdf|png|jpe?g)$/i:/\.(docx|pptx|xlsx|txt|md|csv)$/i;
  let original;
  const decode = value => value.replace(/&(#x[\da-f]+|#\d+|lt|gt|quot|apos|amp);/gi, (raw, entity) => {
   if (entity[0] === '#') {
@@ -49,7 +49,7 @@ export async function extractTeachingFiles(files, unzip, { teachingPackages = fa
   let part = 1;
   const split = remaining.length > 18000;
   while (remaining) {
-   if (results.length + packages.length >= 20) throw Error('本批最多20份可用内容，剩余部分请分批导入');
+   if (results.length >= 20) throw Error('本批最多20份可用内容，剩余部分请分批导入');
    let end = 18000;
    if (remaining.length > end) {
     const line = remaining.lastIndexOf('\n', end);
@@ -119,18 +119,8 @@ export async function extractTeachingFiles(files, unzip, { teachingPackages = fa
    if(['doc','ppt','xls','pdf','png','jpg','jpeg'].includes(ext))return add(name,'');
   }
   if (['txt','md','csv'].includes(ext)) return add(name,decoder.decode(bytes));
-  if (ext === 'json') {
-   if (bytes.length > 1024*1024) throw Error('JSON 备课包超过1MB');
-   const value = JSON.parse(decoder.decode(bytes));
-   if (teachingPackages && value?.brief && value?.lesson) {
-    if (results.length + packages.length >= 20) throw Error('本批最多20份');
-    packages.push({name,value});
-    return;
-   }
-   return add(name,JSON.stringify(value,null,2));
-  }
   if (['docx','pptx','xlsx'].includes(ext)) return office(name,bytes,ext);
-  throw Error('支持 DOCX、PPTX、XLSX、CSV、TXT、MD、JSON 和 ZIP；旧格式请另存为新版');
+  throw Error('支持 DOCX、PPTX、XLSX、CSV、TXT、MD 和 ZIP；旧格式请另存为新版');
  }
  const chosen = Array.from(files);
  if (chosen.length > 20) errors.push('每批最多选择20个文件，其余文件请另批导入');
@@ -145,10 +135,10 @@ export async function extractTeachingFiles(files, unzip, { teachingPackages = fa
    const items = Object.entries(entries);
    if (!items.length) throw Error('压缩包内没有可读取的文档');
    for (const [name,value] of items) {
-    if (results.length + packages.length >= 20) { errors.push(file.name+'：已达到20份，余下内容请分批导入'); break; }
+    if (results.length >= 20) { errors.push(file.name+'：已达到20份，余下内容请分批导入'); break; }
     try { read(file.name+'/'+name,value); } catch (error) { errors.push(name+'：'+error.message); }
    }
   } catch (error) { errors.push(file.name+'：'+error.message); }
  }
- return {results,packages,errors};
+ return {results,errors};
 }
