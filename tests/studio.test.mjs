@@ -43,6 +43,29 @@ test('Office import extracts text and review rejects fabricated evidence',async(
 
 test('AI scene validation rejects overflow, tiny fonts, overlapping text and arbitrary external images',async()=>{const {validateScene}=await import('../worker/ai-deck.js');const p={background:'F5F5F0',elements:[{type:'text',role:'title',text:'纸桥承重',x:.7,y:.5,w:11,h:1,size:36,color:'203D34'},{type:'text',text:'观察并说明理由',x:.7,y:2,w:10,h:2,size:24,color:'203D34'}]};assert.equal(validateScene(p),p);const bad=structuredClone(p);bad.elements[1].x=12;assert.throws(()=>validateScene(bad));bad.elements[1].x=.7;bad.elements[1].y=.5;assert.throws(()=>validateScene(bad));bad.elements[1].y=2;bad.elements[1].size=10;assert.throws(()=>validateScene(bad));const image=structuredClone(p);image.elements.push({type:'image',asset:'https://evil.test/image',x:1,y:1,w:3,h:2});assert.throws(()=>validateScene(image));});
 
+test('DeepSeek pages normalize signed line offsets and retain text when the layout is invalid',async()=>{
+ const {prepareDeckScene,validateScene}=await import('../worker/ai-deck.js');
+ const page={title:'斜坡上的数学'};
+ const raw={background:'F5F5F0',notes:'请学生说明坡度和水平距离的关系。',elements:[
+  {type:'text',role:'title',text:page.title,x:'0.8 英寸',y:.55,w:11,h:1,size:38,color:'203D34'},
+  {type:'text',role:'body',text:'怎样用坡角和水平距离估算高度？',x:.8,y:2,w:11,h:1.5,size:28,color:'203D34'},
+  {type:'line',x:4,y:5,w:'3.5',h:'-2.25',stroke:'427A68'},
+ ]};
+ const prepared=prepareDeckScene(raw,page,false);
+ assert.equal(prepared.elements[0].x,.8);
+ assert.deepEqual(prepared.elements[2],{type:'line',x:4,y:2.75,w:3.5,h:2.25,stroke:'427A68',flipV:true});
+ assert.equal(prepared.layoutAdjusted,undefined);
+ assert.equal(validateScene(prepared),prepared);
+ raw.elements[1].w='缺失';
+ const recovered=prepareDeckScene(raw,page,false);
+ assert.equal(recovered.layoutAdjusted,true);
+ assert.match(recovered.elements.at(-1).text,/估算高度/);
+ assert.match(recovered.notes,/说明坡度/);
+ const textOnly=prepareDeckScene({title:page.title,points:['找出对边','量出水平距离'],notes:'独立作答。'},page,false);
+ assert.equal(textOnly.layoutAdjusted,true);
+ assert.match(textOnly.elements.at(-1).text,/水平距离/);
+ assert.throws(()=>prepareDeckScene({elements:[]},page,false),/教学文字/);
+});
 test('public presentation endpoints retire the old model generator without any upstream call',async()=>{const {default:worker}=await import('../worker/index.js');const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('No model calls expected')};try{for(const path of ['/api/deck/plan','/api/deck/slide']){const r=await worker.fetch(new Request('https://qizhi.test'+path,{method:'POST',headers:{origin:'https://qizhi.test'},body:'{}'}),{LLM_API_KEY:'test-only'});assert.equal(r.status,410);assert.equal((await r.json()).code,'PPTMASTER_ENDPOINT_RETIRED');}assert.equal(calls,0);const status=await(await worker.fetch(new Request('https://qizhi.test/api/status'),{})).json();assert.equal(status.presentation.automaticExecution,true);assert.equal(status.presentation.mode,'server-execution');}finally{globalThis.fetch=previous;}});
 
 test('large mixed Office imports retain slide themes, spreadsheet values and complete text segments', async () => {
