@@ -7,7 +7,7 @@ export function createPptWake(runnerURL,{fetcher=fetch,pause=delay}={}){
 
  async function notify(){
   // The proxy can serve a starting page instead of passing the wake POST through.
-  for(const wait of [0,2000,5000]){
+  for(const wait of [0,2000,5000,12000]){
    if(wait)await pause(wait);
    try{
     const health=await fetcher(origin+'/health',{redirect:'error',signal:AbortSignal.timeout(75000)});

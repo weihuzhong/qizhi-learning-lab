@@ -1,8 +1,20 @@
-export const pptOnlineClient=String.raw`
+import {pptRunnerURL} from '../server/ppt-config.js';
+
+export const pptOnlineClient='const pptRunnerHealth='+JSON.stringify(new URL('/health',pptRunnerURL).href)+';\n'+String.raw`
 let pptServiceConfig=null,pptSubmitting=false,pptOnlineError='',pptPollTimer=null,pptPolling=false,pptAccessLost='';
 let pptPreview=null,pptPreviewBackup='';
+let pptBrowserWake=null;
 const pptTemporaryDraftMarker='初稿已生成，请从参赛网站下载并查看逐页复核建议。';
 const pptPhases={queued:'等待后台接单',running:'制作中',preparing:'加载PPTMaster',designing:'设计页面',checking:'整稿检查',exporting:'导出PPTX',rendering:'渲染预览',complete:'整稿完成',draft:'待复核初稿',failed:'制作未完成',cancelled:'已停止'};
+function wakePptFromBrowser(id){
+ if(id.startsWith('r-')||pptBrowserWake?.id===id&&(pptBrowserWake.pending||Date.now()-pptBrowserWake.at<35000))return;
+ const attempt={id,at:Date.now(),pending:true};
+ pptBrowserWake=attempt;
+ // This request only starts the service. The signed worker still claims the persisted job.
+ fetch(pptRunnerHealth,{mode:'no-cors',credentials:'omit',referrerPolicy:'no-referrer',
+  cache:'no-store',signal:AbortSignal.timeout(60000)})
+  .catch(()=>{}).finally(()=>{attempt.pending=false;});
+}
 function onlinePptScope(){return lessonScope(T().lessonBrief||T().brief);}
 function onlinePptJob(){
  const {job,scope}=T().pptOnline||{},lesson=lessonForBrief();
@@ -155,9 +167,12 @@ async function pollOnlinePpt(id){
   saveTeaching();
   if(active==='prep'&&prepTab==='slides')render();
   if(!['queued','running'].includes(job.status))return;
-  if(job.status==='queued'&&Date.now()-(T().pptOnline.lastWake||0)>32000){
-   T().pptOnline.lastWake=Date.now();
-   api('ppt/jobs/'+id+'/wake',{}).catch(()=>{});
+  if(job.status==='queued'){
+   wakePptFromBrowser(id);
+   if(Date.now()-(T().pptOnline.lastWake||0)>32000){
+    T().pptOnline.lastWake=Date.now();
+    api('ppt/jobs/'+id+'/wake',{}).catch(()=>{});
+   }
   }
   pptPollTimer=setTimeout(()=>pollOnlinePpt(id),job.status==='queued'?3000:4500);
  }catch(error){

@@ -171,7 +171,7 @@ createServer(async (req, res) => {
       'referrer-policy': 'same-origin',
       'content-security-policy': url.pathname === '/office-preview.html'
         ? "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
-        : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+        : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self' " + new URL(pptRunner).origin + "; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
     });
     res.end(req.method === 'HEAD' ? undefined : asset[0]);
   } catch {

@@ -61,6 +61,7 @@ test('the server waits through a runner cold start and confirms a single wake fo
   fetcher:async (url,options)=>{
    calls.push([new URL(url).pathname,options.method]);
    if(calls.length===1)return new Response('<html>Starting service</html>');
+   if(calls.length===4)return new Response('Service is still starting',{status:503});
    if(url.endsWith('/health'))return Response.json({engine:'ppt-master',integrity:true});
    if(calls.length===3)return new Response('<html>Starting service</html>');
    return Response.json({accepted:true},{status:202});
@@ -69,13 +70,13 @@ test('the server waits through a runner cold start and confirms a single wake fo
  const first=wake();
  assert.equal(wake(),first);
  assert.equal(await first,true);
- assert.deepEqual(pause,[2000,5000]);
- assert.deepEqual(calls,[['/health',undefined],['/health',undefined],['/v1/wake','POST'],['/health',undefined],['/v1/wake','POST']]);
+ assert.deepEqual(pause,[2000,5000,12000]);
+ assert.deepEqual(calls,[['/health',undefined],['/health',undefined],['/v1/wake','POST'],['/health',undefined],['/health',undefined],['/v1/wake','POST']]);
  const followUp=wake();
  assert.equal(wake(),followUp);
  assert.equal(await followUp,true);
- assert.ok(pause[2]>0&&pause[2]<=15000);
- assert.deepEqual(calls.slice(5),[['/health',undefined],['/v1/wake','POST']]);
+ assert.ok(pause[3]>0&&pause[3]<=15000);
+ assert.deepEqual(calls.slice(6),[['/health',undefined],['/v1/wake','POST']]);
 });
 
 test('queued owner requests wake the runner and validated drafts stay downloadable without a passing review',async()=>{
