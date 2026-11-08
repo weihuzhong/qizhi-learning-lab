@@ -5,11 +5,14 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { assertLessonTopic, lessonGenerationRoute, prepareLessonRequest } from '../worker/lesson-topic.js';
 import { createAppApi } from './app-api.js';
+import { pptRunnerURL as pptRunner } from './ppt-config.js';
+import { createPptWake } from './ppt-wake.js';
 import { createSupabaseStores, migrationKey } from './supabase-store.js';
 
 const legacyBackend = 'https://qizhi-wuhaozhe.netlify.app';
 const databaseEnabled = process.env.QIZHI_DATA_BACKEND === 'supabase';
 const readOnly = process.env.QIZHI_MIGRATION_READ_ONLY === '1';
+const warmPptRunner = createPptWake(pptRunner);
 let localApi;
 if (databaseEnabled) {
   const vaultSecret = process.env.USER_MODEL_VAULT_SECRET;
@@ -17,23 +20,8 @@ if (databaseEnabled) {
   const stores = createSupabaseStores(process.env);
   const migration = await stores.cloudStore.get(migrationKey);
   if (migration?.verified !== true || !/^[a-f0-9]{64}$/.test(migration.manifest)) throw Error('旧数据导入尚未验证，拒绝切换正式接口');
-  localApi = createAppApi({ ...stores, vaultSecret, model: process.env.LLM_MODEL || 'deepseek-flash' });
-}
-const pptRunner = 'https://qizhi-pptmaster.onrender.com';
-const draftMarker = '初稿已生成，请从参赛网站下载并查看逐页复核建议。';
-let lastRunnerWake = 0;
-let wakingRunner = false;
-
-function warmPptRunner() {
-  if (wakingRunner || Date.now() - lastRunnerWake < 15000) return;
-  wakingRunner = true;
-  lastRunnerWake = Date.now();
-  // Keep the wake request alive through Render's cold start, outside the user's request.
-  void fetch(pptRunner + '/v1/wake', {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(70000),
-  }).then(response => response.body?.cancel()).catch(() => {}).finally(() => {
-    wakingRunner = false;
-  });
+  localApi = createAppApi({ ...stores, vaultSecret, model: process.env.LLM_MODEL || 'deepseek-flash',
+    requestPptWake: readOnly ? undefined : warmPptRunner });
 }
 const port = Number(process.env.PORT || 10000);
 const origin = new URL(process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port).origin;
@@ -108,8 +96,7 @@ async function forwardApi(req, res, url) {
     }
   }
 
-  if (!readOnly && url.pathname === '/api/ppt/config' && session?.some(cookie => cookie.startsWith('qizhi_session='))) warmPptRunner();
-  const draftFile = req.method === 'GET' && /^\/api\/ppt\/drafts\/[a-f0-9]{32}\/(?:deck\.pptx|page-\d{2}\.png|audit\.json)$/.test(url.pathname);
+  const draftFile = req.method === 'GET' && /^\/api\/ppt\/drafts\/[a-f0-9]{32}(?:\/(?:deck\.pptx|page-\d{2}\.png|audit\.json))?$/.test(url.pathname);
   let basicJob=false;
   if(req.method==='POST'&&url.pathname==='/api/ppt/jobs'){
     try{basicJob=JSON.parse(body)?.mode==='basic';}catch{}
@@ -143,27 +130,8 @@ async function forwardApi(req, res, url) {
     }
     return json(res, response.status, data);
   }
-  if (response.ok && req.method === 'POST' &&
+  if (!localApi && !readOnly && response.ok && req.method === 'POST' &&
       (url.pathname === '/api/ppt/jobs' || /^\/api\/ppt\/jobs\/[a-f0-9]{32}\/wake$/.test(url.pathname))) warmPptRunner();
-  if (response.ok && req.method === 'GET' && /^\/api\/ppt\/jobs\/[a-f0-9]{32}$/.test(url.pathname)) {
-    const data = await response.json();
-    const job = data.job;
-    if (job?.status === 'failed' && job.error === draftMarker) {
-      const draft = await fetch(pptRunner + '/api/ppt/drafts/' + job.id, {
-        headers, redirect: 'error', signal: AbortSignal.timeout(65000),
-      }).catch(() => null);
-      if (draft?.ok) {
-        const {result, expiresAt} = await draft.json();
-        job.status = 'draft';
-        job.error = null;
-        job.progress = {phase: 'draft', pages: result.actualCount, message: '初稿已生成，请查看复核意见并下载修改'};
-        job.result = {...result, delivery: 'temporary', expiresAt};
-      } else if (draft?.status === 410) {
-        job.error = '临时初稿已过期或后台已重启，教案已保留';
-      } else return json(res, 503, {error: '临时初稿暂时无法读取，正在重试'});
-    }
-    return json(res, response.status, data);
-  }
   const documentFile = url.pathname === '/api/cloud/team/document/file';
   const output = { 'cache-control': draftFile || overflowJob || documentFile ? 'private, no-store' : 'no-store', 'x-content-type-options': 'nosniff' };
   for (const name of ['content-type', 'content-disposition']) {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign,createHash} from 'node:crypto';
 import {createPptService,verifyPptWorker,resolvePptWorkerKey} from '../server/ppt-service.js';
 import {templateCatalog,templateLesson} from '../worker/template-catalog.js';
+import {createPptWake} from '../server/ppt-wake.js';
 import {pptOnlineClient} from '../worker/ppt-online-client.js';
 class Store{data=new Map();n=0;async get(k){return structuredClone(this.data.get(k)?.data??null)}async getWithMetadata(k){return structuredClone(this.data.get(k)??null)}async getMetadata(k){return this.data.has(k)?{etag:this.data.get(k).etag}:null}async set(k,data){this.data.set(k,{data,etag:String(++this.n)})}async setJSON(k,data,o={}){const old=this.data.get(k);if(o.onlyIfNew&&old||o.onlyIfMatch&&old?.etag!==o.onlyIfMatch)return {modified:false};this.data.set(k,{data:structuredClone(data),etag:String(++this.n)});return {modified:true}}}
 const keys=generateKeyPairSync('rsa',{modulusLength:2048,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
@@ -50,4 +51,61 @@ test('independent content review rejects contradictions and malformed results be
   const good=await call(api,'worker/review',{...auth,slides},'',true);assert.equal(good.data.passed,true);assert.equal(good.data.attempts,3);
   assert.equal((await call(api,'worker/review',{...auth,slides},'',true)).status,429);assert.equal(calls,3);
  }finally{globalThis.fetch=previous;}
+});
+
+test('the server waits through a runner cold start and confirms a single wake for concurrent requests',async()=>{
+ const calls=[];
+ const pause=[];
+ const wake=createPptWake('https://cold-runner.test',{
+  pause:async ms=>{pause.push(ms);},
+  fetcher:async (url,options)=>{
+   calls.push([new URL(url).pathname,options.method]);
+   if(calls.length===1)return new Response('<html>Starting service</html>');
+   if(url.endsWith('/health'))return Response.json({engine:'ppt-master',integrity:true});
+   if(calls.length===3)return new Response('<html>Starting service</html>');
+   return Response.json({accepted:true},{status:202});
+  },
+ });
+ const first=wake();
+ assert.equal(wake(),first);
+ assert.equal(await first,true);
+ assert.deepEqual(pause,[2000,5000]);
+ assert.deepEqual(calls,[['/health',undefined],['/health',undefined],['/v1/wake','POST'],['/health',undefined],['/v1/wake','POST']]);
+ const followUp=wake();
+ assert.equal(wake(),followUp);
+ assert.equal(await followUp,true);
+ assert.ok(pause[2]>0&&pause[2]<=15000);
+ assert.deepEqual(calls.slice(5),[['/health',undefined],['/v1/wake','POST']]);
+});
+
+test('queued owner requests wake the runner and validated drafts stay downloadable without a passing review',async()=>{
+ const store=new Store();
+ let wakes=0;
+ const api=createPptService(store,{},{workerKey:keys.publicKey,runnerURL:'',
+  billing:fixtureBilling(),requestWake:()=>{wakes++;}});
+ const initial=await call(api,'jobs',source),id=initial.data.job.id;
+ assert.equal(initial.status,202);
+ assert.equal(wakes,1);
+ assert.equal((await call(api,'jobs/'+id)).status,403);
+ assert.equal(wakes,1);
+ assert.equal((await call(api,'jobs/'+id,undefined,initial.cookie)).data.job.status,'queued');
+ assert.equal(wakes,2);
+ const claim=await call(api,'worker/claim',{},'',true);
+ assert.equal(claim.data.job.id,id);
+ const auth={id,runId:claim.data.job.runId};
+ const pages=Array.from({length:source.count},(_,i)=>({number:i+1,preview:'page-'+String(i+1).padStart(2,'0')+'.png'}));
+ const result={engine:'ppt-master',sourceCommit:'3c956467cd053fec36816cb7d2ca973729a5d4d1',actualCount:source.count,pages,quality:'draft'};
+ const bytes=Buffer.from('original draft bytes');
+ for(const name of ['deck.pptx','audit.json',...pages.map(p=>p.preview)]){
+  assert.equal((await call(api,'worker/upload',{...auth,name,data:bytes.toString('base64')},'',true)).status,200);
+ }
+ const finished=await call(api,'worker/complete',{...auth,result},'',true);
+ assert.equal(finished.data.job.status,'draft');
+ assert.equal(finished.data.job.result.review.status,'unavailable');
+ const url='https://qizhi.test/api/ppt/jobs/'+id+'/file/deck.pptx';
+ assert.equal((await api(new Request(url))).status,403);
+ const file=await api(new Request(url,{headers:{cookie:initial.cookie}}));
+ assert.equal(file.status,200);
+ assert.deepEqual(Buffer.from(await file.arrayBuffer()),bytes);
+ assert.equal(wakes,2);
 });

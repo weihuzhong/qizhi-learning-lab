@@ -1,6 +1,7 @@
 export const pptOnlineClient=String.raw`
 let pptServiceConfig=null,pptSubmitting=false,pptOnlineError='',pptPollTimer=null,pptPolling=false,pptAccessLost='';
 let pptPreview=null,pptPreviewBackup='';
+const pptTemporaryDraftMarker='初稿已生成，请从参赛网站下载并查看逐页复核建议。';
 const pptPhases={queued:'等待后台接单',running:'制作中',preparing:'加载PPTMaster',designing:'设计页面',checking:'整稿检查',exporting:'导出PPTX',rendering:'渲染预览',complete:'整稿完成',draft:'待复核初稿',failed:'制作未完成',cancelled:'已停止'};
 function onlinePptScope(){return lessonScope(T().lessonBrief||T().brief);}
 function onlinePptJob(){
@@ -136,6 +137,18 @@ async function pollOnlinePpt(id){
  pptPolling=true;
  try{
   const {job}=await api('ppt/jobs/'+id);
+  if(job.status==='failed'&&job.error===pptTemporaryDraftMarker){
+   try{
+    const {result,expiresAt}=await api('ppt/drafts/'+id);
+    job.status='draft';
+    job.error=null;
+    job.progress={phase:'draft',pages:result.actualCount,message:'初稿已生成，请查看复核意见并下载修改'};
+    job.result={...result,delivery:'temporary',expiresAt};
+   }catch(error){
+    if(error.status!==410)throw error;
+    job.error='临时初稿已过期或后台已重启，教案已保留';
+   }
+  }
   if(onlinePptJob()?.id!==id)return;
   T().pptOnline.job=job;
   pptOnlineError='';

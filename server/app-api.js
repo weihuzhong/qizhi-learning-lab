@@ -4,9 +4,9 @@ import {createPptService} from './ppt-service.js';
 import {createUserModel} from './user-model.js';
 // The deployment key is used solely to derive the credential-vault encryption key.
 // Only a signed-in user's decrypted key is ever passed to model-request code.
-export function createAppApi({cloudStore,pptStore,vaultSecret,model='deepseek-flash',fetcher=fetch}){
+export function createAppApi({cloudStore,pptStore,vaultSecret,model='deepseek-flash',fetcher=fetch,requestPptWake}){
  const billing=createUserModel(cloudStore,{vaultSecret,model,fetcher});
- const ppt=createPptService(pptStore,{LLM_MODEL:model},{billing});
+ const ppt=createPptService(pptStore,{LLM_MODEL:model},{billing,requestWake:requestPptWake});
  const cloud=createCloudApi(cloudStore);
  return async req=>{try{const path=new URL(req.url).pathname;
   if(path==='/api/status'){const state=await billing.status(req);return worker.fetch(req,{LLM_MODEL:model,USER_AUTHENTICATED:state.authenticated,USER_MODEL_CONFIGURED:state.configured,USER_ORIGINAL_FILES:true});}

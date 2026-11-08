@@ -27,7 +27,7 @@ export async function resolvePptWorkerKey(runnerURL,header,fetcher=fetch){
  if(key.asymmetricKeyType!=='rsa'||key.asymmetricKeyDetails.modulusLength<2048||digest(identity.publicKey)!==identity.keyId)reject('后台公钥无效',503);
  workerKeyCache.set(endpoint.origin,{publicKey:identity.publicKey,keyId:identity.keyId,fetched:now,expires:now+300000});return identity.publicKey;
 }
-export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=pptWorkerPublicKey,billing}={}){
+export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=pptWorkerPublicKey,billing,requestWake}={}){
  const get=key=>store.get(key,{type:'json'});
  async function modelForJob(j){if(!billing||!j.billingUserId)reject('此任务没有个人模型授权，请登录绑定密钥后重新提交',428);return billing.forUser(j.billingUserId);}
  const update=async(key,fn)=>{for(let i=0;i<7;i++){const old=await store.getWithMetadata(key,{type:'json'}),next=await fn(old?.data??null);const r=await store.setJSON(key,next,old?{onlyIfMatch:old.etag}:{onlyIfNew:true});if(r.modified)return next;}reject('请求冲突，请重试',409)};
@@ -35,7 +35,7 @@ export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=ppt
  const jobId=id=>{if(!/^[a-f0-9]{32}$/.test(id||''))reject('任务编号无效');return id};
  async function job(id){const j=await get('jobs/'+jobId(id));if(!j||j.expiresAt<Date.now())reject('任务不存在或已过期',404);return j;}
  const publicJob=j=>({id:j.id,title:j.lesson.title,count:j.count,style:j.style,status:j.status,progress:j.progress||{phase:'queued',message:'等待后台制作',pages:0},createdAt:j.createdAt,updatedAt:j.updatedAt,error:j.error||null,result:j.result||null});
- async function wake(){if(!runnerURL)return;const u=new URL(runnerURL);if(u.protocol!=='https:')throw Error('执行服务必须使用HTTPS');try{await fetch(u.origin+'/v1/wake',{method:'POST',headers:{'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(4500)});}catch{/* Cold starts are retried through the job's wake endpoint. */}}
+ async function wake(){if(requestWake){requestWake();return;}if(!runnerURL)return;const u=new URL(runnerURL);if(u.protocol!=='https:')throw Error('执行服务必须使用HTTPS');try{await fetch(u.origin+'/v1/wake',{method:'POST',headers:{'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(4500)});}catch{/* Cold starts are retried through the job's wake endpoint. */}}
  return async req=>{
   try{
    const url=new URL(req.url),path=url.pathname,internal=path.startsWith('/api/ppt/worker/');
@@ -43,7 +43,7 @@ export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=ppt
    if(internal){const header=req.headers.get('authorization'),key=runnerURL?await resolvePptWorkerKey(runnerURL,header):workerKey;if(!verifyPptWorker(header,key))reject('执行服务认证失败',403);}
    else if(req.method==='POST'&&req.headers.get('origin')!==url.origin)reject('来源不匹配',403);
    const b=req.method==='POST'?await req.json():{};
-   if(path==='/api/ppt/config')return json({engine:'ppt-master',automaticExecution:!!runnerURL,connected:!!runnerURL,maxPages:20,mode:runnerURL?'server-execution':'deployment-pending'});
+   if(path==='/api/ppt/config')return json({engine:'ppt-master',automaticExecution:!!runnerURL,connected:!!runnerURL,draftDelivery:true,maxPages:20,mode:runnerURL?'server-execution':'deployment-pending'});
    if(internal){
     if(req.method!=='POST')reject('请使用POST',405);
     if(path==='/api/ppt/worker/claim'){
@@ -81,8 +81,15 @@ export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=ppt
     if(path==='/api/ppt/worker/complete'){
      if(b.result?.pages?.length!==j.count||b.result?.actualCount!==j.count||b.result?.engine!=='ppt-master'||b.result?.sourceCommit!=='3c956467cd053fec36816cb7d2ca973729a5d4d1')reject('整稿验证不通过');
      for(const name of ['deck.pptx','audit.json',...b.result.pages.map((_,i)=>'page-'+String(i+1).padStart(2,'0')+'.png')])if(!await store.getMetadata('files/'+j.id+'/'+name))reject('交付文件缺失：'+name);
-     if(j.reviewRequired&&!j.contentReview?.passed)reject('须先通过独立教学内容复核',409);
-     const next=await update('jobs/'+j.id,x=>({...x,status:'complete',updatedAt:Date.now(),progress:{phase:'complete',pages:j.count,message:'整稿制作完成，可逐页检查并下载'},result:b.result}));return json({job:publicJob(next)});
+     const next=await update('jobs/'+j.id,x=>{
+      if(x.status!=='running'||x.runId!==j.runId)reject('任务已停止',409);
+      const draft=b.result.quality==='draft',review=x.contentReview;
+      if(!draft&&x.reviewRequired&&!review?.passed)reject('须先通过独立教学内容复核',409);
+      const status=draft?'draft':'complete';
+      return {...x,status,updatedAt:Date.now(),
+       progress:{phase:status,pages:x.count,message:draft?'初稿已生成，请查看复核意见并下载修改':'整稿制作完成，可逐页检查并下载'},
+       result:{...b.result,review:{status:review?.passed?'passed':review?'flagged':'unavailable',issues:review?.issues||[]}}};
+     });return json({job:publicJob(next)});
     }
     if(path==='/api/ppt/worker/fail'){const next=await update('jobs/'+j.id,x=>({...x,status:'failed',updatedAt:Date.now(),error:String(b.error||'后台制作未完成').slice(0,500)}));return json({job:publicJob(next)});}
     reject('未知执行请求',404);
@@ -103,12 +110,13 @@ export function createPptService(store,env,{runnerURL=pptRunnerURL,workerKey=ppt
    if(m[2]==='cancel'&&req.method==='POST'){if(!['queued','running'].includes(j.status))reject('任务已结束',409);const next=await update('jobs/'+j.id,x=>({...x,status:'cancelled',updatedAt:Date.now()}));return json({job:publicJob(next)});}
    if(m[2]==='wake'&&req.method==='POST'){await throttle('wake/'+j.id,1,30000);await wake();return json({job:publicJob(j)});}
    if(m[2]==='file'&&req.method==='GET'){
-    if(j.status!=='complete'||!/^deck\.pptx$|^page-\d{2}\.png$|^audit\.json$/.test(m[3]||''))reject('文件尚未就绪',409);
+    if(!['complete','draft'].includes(j.status)||!/^(?:deck\.pptx|page-\d{2}\.png|audit\.json)$/.test(m[3]||''))reject('文件尚未就绪',409);
     const bytes=await store.get('files/'+j.id+'/'+m[3],{type:'arrayBuffer'});if(!bytes)reject('文件不存在',404);
     const type=m[3].endsWith('.png')?'image/png':m[3].endsWith('.pptx')?'application/vnd.openxmlformats-officedocument.presentationml.presentation':'application/json';
-    return new Response(bytes,{headers:{'content-type':type,'cache-control':'private, no-store','x-content-type-options':'nosniff',...(m[3]==='deck.pptx'?{'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(j.lesson.title+'.pptx')}:{})}});
+    return new Response(bytes,{headers:{'content-type':type,'cache-control':'private, no-store','x-content-type-options':'nosniff',...(m[3]==='deck.pptx'?{'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(j.lesson.title+(j.status==='draft'?'_待复核初稿':'')+'.pptx')}:{})}});
    }
    if(req.method!=='GET'||m[2])reject('请求方法无效',405);
+   if(j.status==='queued'&&requestWake)requestWake();
    if(j.status==='running'&&Date.now()-j.updatedAt>25*60000){j.status='failed';j.error='后台执行中断。请重新发起制作；原教案仍保留。';}
    return json({job:publicJob(j)});
   }catch(e){return json({error:e.message||'课件服务暂不可用'},e.status||500);}
