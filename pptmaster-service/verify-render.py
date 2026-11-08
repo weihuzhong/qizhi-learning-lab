@@ -1,13 +1,94 @@
-"""Verify native PPTX, then render matching SVGs with bounded local resources."""
+"""Normalize and verify editable PowerPoint output, then render the actual deck."""
+from collections import Counter
 import json
 import re
 import os
+import subprocess
 import sys
+from tempfile import TemporaryDirectory
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlparse, unquote
+from zipfile import ZipFile
+
+import fitz
+from lxml import etree
 from pptx import Presentation
 from cairosvg.surface import PNGSurface
 from cairosvg.url import safe_fetch
+
+
+DML = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+PML = '{http://schemas.openxmlformats.org/presentationml/2006/main}'
+
+
+def normalize_text_boxes(deck):
+    """Use the actual CJK font and preserve explicit line breaks in native text boxes."""
+    deck = Path(deck)
+    with TemporaryDirectory(dir=deck.parent) as scratch:
+        output = Path(scratch) / deck.name
+        with ZipFile(deck) as source, ZipFile(output, 'w') as target:
+            for member in source.infolist():
+                data = source.read(member)
+                if re.fullmatch(r'ppt/slides/slide\d+\.xml', member.filename):
+                    slide = etree.fromstring(data)
+                    for body in slide.iter(PML + 'txBody'):
+                        for element in body.iter():
+                            if (element.tag in {DML + 'latin', DML + 'ea', DML + 'cs'}
+                                    and element.get('typeface') in {'微软雅黑', 'Microsoft YaHei', 'Noto Sans CJK SC'}):
+                                element.set('typeface', 'Noto Sans CJK SC')
+                                element.attrib.pop('panose', None)
+                                element.attrib.pop('charset', None)
+                        props = body.find(DML + 'bodyPr')
+                        if props is not None and props.get('wrap') == 'none':
+                            auto_fit = props.find(DML + 'spAutoFit')
+                            if auto_fit is not None:
+                                auto_fit.tag = DML + 'noAutofit'
+                    data = etree.tostring(slide, encoding='UTF-8', xml_declaration=True, standalone=True)
+                target.writestr(member, data)
+        output.replace(deck)
+
+
+def visible_characters(text):
+    return Counter(c for c in unicodedata.normalize('NFKC', text) if c.isalnum())
+
+
+def rendered_text_issues(page, text, slide):
+    missing = visible_characters('\n'.join(text)) - visible_characters(page.get_text())
+    issues = []
+    if sum(missing.values()) >= 2:
+        issues.append({'slide': slide, 'reason': '放映检查发现部分文字缺失或被裁切。',
+                       'correction': '请对照教案检查本页文字，扩大文字框或按语义分行。'})
+    blocks = page.get_text('dict', flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)['blocks']
+    spans = [span for block in blocks for line in block.get('lines', []) for span in line['spans']]
+    small_characters = sum(
+        sum(visible_characters(span['text']).values())
+        for span in spans if span['size'] < page.rect.width * 21 / 1280
+    )
+    if small_characters > 30:
+        issues.append({'slide': slide, 'reason': '本页有较多小字，课堂投影可能难以辨认。',
+                       'correction': '把实施细节移入教师备注，放大保留在页面上的学生用语。'})
+    return issues
+
+
+def render_powerpoint(deck, result, output):
+    with TemporaryDirectory(dir=deck.parent) as scratch:
+        directory = Path(scratch)
+        subprocess.run(
+            ['soffice', '-env:UserInstallation=' + (directory / 'profile').as_uri(),
+             '--headless', '--convert-to', 'pdf:impress_pdf_Export',
+             '--outdir', str(directory), str(deck)],
+            check=True, capture_output=True, timeout=55,
+        )
+        with fitz.open(directory / (deck.stem + '.pdf')) as pdf:
+            if len(pdf) != len(result):
+                raise ValueError('放映页数与 PPTX 不一致')
+            issues = []
+            for index, (page, info) in enumerate(zip(pdf, result), 1):
+                issues.extend(rendered_text_issues(page, info['nativeText'], index))
+                scale = 1280 / page.rect.width
+                page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(output / f'page-{index:02}.png')
+            return issues
 
 
 def render_svg(svg, preview, project, skill_dir=None):
@@ -80,15 +161,32 @@ def verify_and_render(project, deck, expected, skill_dir=None, *, render=True):
         if not slide.has_notes_slide or not slide.notes_slide.notes_text_frame.text.strip():
             raise ValueError(f'第{index}页缺少教师指导备注')
         preview = output / f'page-{index:02}.png'
-        if render:
-            render_svg(svg, preview, project, skill_dir)
-        result.append({'text': '\n'.join(text)[:8000], 'title': next((x.strip().split('\n')[0][:80] for x in text if x.strip()), f'第{index}页'), 'preview': str(preview)})
-    return {'count': len(presentation.slides), 'pages': result}
+        result.append({'text': '\n'.join(text)[:8000], 'nativeText': text,
+                       'title': next((x.strip().split('\n')[0][:80] for x in text if x.strip()), f'第{index}页'),
+                       'preview': str(preview)})
+    issues = []
+    preview_source = None
+    if render:
+        try:
+            issues = render_powerpoint(deck, result, output)
+            preview_source = 'pptx'
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            print(f'Native preview unavailable: {type(error).__name__}', file=sys.stderr)
+            for svg, info in zip(pages, result):
+                render_svg(svg, info['preview'], project, skill_dir)
+            preview_source = 'design'
+    for info in result:
+        del info['nativeText']
+    return {'count': len(presentation.slides), 'pages': result,
+            'previewSource': preview_source, 'visualIssues': issues}
 
 
 if __name__ == '__main__':
-    args = [arg for arg in sys.argv[1:] if arg != '--text-only']
-    print(json.dumps(verify_and_render(
-        args[0], args[1], int(args[2]), args[3] if len(args) > 3 else None,
-        render='--text-only' not in sys.argv,
-    ), ensure_ascii=False))
+    if sys.argv[1] == '--normalize-text':
+        normalize_text_boxes(sys.argv[2])
+    else:
+        args = [arg for arg in sys.argv[1:] if arg != '--text-only']
+        print(json.dumps(verify_and_render(
+            args[0], args[1], int(args[2]), args[3] if len(args) > 3 else None,
+            render='--text-only' not in sys.argv,
+        ), ensure_ascii=False))

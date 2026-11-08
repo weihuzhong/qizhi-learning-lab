@@ -2,6 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+import fitz
 from PIL import Image
 
 module_path = Path(__file__).resolve().parents[1] / 'pptmaster-service/verify-render.py'
@@ -11,6 +12,15 @@ spec.loader.exec_module(renderer)
 
 
 class RenderTests(unittest.TestCase):
+    def test_missing_rendered_words_are_flagged(self):
+        with fitz.open() as pdf:
+            page = pdf.new_page(width=960, height=540)
+            page.insert_text((50, 90), 'Ask for help', fontsize=27)
+            self.assertEqual(renderer.rendered_text_issues(page, ['Ask for help'], 1), [])
+            issues = renderer.rendered_text_issues(page, ['Ask for help', 'Go to a safe place'], 2)
+            self.assertEqual([issue['slide'] for issue in issues], [2])
+            self.assertIn('缺失', issues[0]['reason'])
+
     def test_relative_images_are_visible(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)
