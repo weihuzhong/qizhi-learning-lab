@@ -2,6 +2,7 @@ import worker from '../worker/index.js';
 import {createCloudApi} from './cloud.js';
 import {createPptService} from './ppt-service.js';
 import {createUserModel} from './user-model.js';
+import {aiDeckApi} from '../worker/ai-deck.js';
 // The deployment key is used solely to derive the credential-vault encryption key.
 // Only a signed-in user's decrypted key is ever passed to model-request code.
 export function createAppApi({cloudStore,pptStore,vaultSecret,model='deepseek-flash',fetcher=fetch,requestPptWake}){
@@ -13,6 +14,10 @@ export function createAppApi({cloudStore,pptStore,vaultSecret,model='deepseek-fl
   if(path==='/api/cloud/model'||path.startsWith('/api/cloud/model/'))return billing.handle(req);
   if(path.startsWith('/api/cloud/'))return cloud(req);
   if(path.startsWith('/api/ppt/'))return ppt(req);
+  if(path==='/api/deck/experiment/plan'||path==='/api/deck/experiment/slide'){
+   const account=await billing.forRequest(req);
+   return aiDeckApi(req,account.env,fetcher);
+  }
   if(path==='/api/chat'||path==='/api/lesson'||path.startsWith('/api/lesson/')){const account=await billing.forRequest(req);return worker.fetch(req,account.env);}
   return worker.fetch(req,{});
  }catch(e){return Response.json({error:e.status?e.message:'服务暂不可用，请稍后重试',code:e.code||'SERVICE_UNAVAILABLE'},{status:e.status||503,headers:{'cache-control':'no-store'}});}};

@@ -45,6 +45,39 @@ test('all paid API routes reject guests/unbound users without invoking upstream;
   await run(api,'cloud/model/remove',{},a.cookie);assert.equal((await run(api,'chat',{mode:'prep',messages:[]},a.cookie)).status,428);assert.equal(calls,1);
  }finally{globalThis.fetch=previous;}
 });
+test('the DeepSeek deck experiment authenticates and uses only the signed-in account',async()=>{
+ const cloudStore=new Store(),pptStore=new Store();
+ const plan={palette:{background:'FFF6EA',foreground:'213235',accent:'206D60'},
+  pages:Array.from({length:8},(_,i)=>({title:'教学问题 '+(i+1),purpose:'判断课堂情境',visual:'留白和对比'}))};
+ const scene={background:'FFF6EA',elements:[
+  {type:'text',role:'title',x:1,y:.7,w:11,h:1,size:40,color:'213235',text:'遇到陌生请求'},
+  {type:'text',role:'body',x:1,y:3,w:11,h:1,size:30,color:'213235',text:'你会向谁求助？'},
+ ],notes:'请学生结合情境回答。'};
+ let calls=0;
+ const fetcher=async(url,options)=>{
+  if(url==='https://api.deepseek.com/user/balance')return balanceFetcher(url,options);
+  assert.equal(url,'https://api.deepseek.com/chat/completions');
+  assert.equal(options.headers.authorization,'Bearer '+keyA);
+  return Response.json({choices:[{message:{content:JSON.stringify(calls++===0?plan:scene)}}]});
+ };
+ const api=createAppApi({cloudStore,pptStore,vaultSecret,fetcher});
+ const a=await register(api,'experimenter'),lesson=templateLesson(templateCatalog[0]);
+ const planRoute='deck/experiment/plan';
+ assert.equal((await run(api,planRoute,{lesson,count:8})).status,401);
+ assert.equal((await run(api,planRoute,{lesson,count:8},a.cookie)).status,428);
+ assert.equal(calls,0);
+ assert.equal((await run(api,'cloud/model',{apiKey:keyA},a.cookie)).status,200);
+ assert.equal((await run(api,planRoute,{lesson,count:7.5},a.cookie)).status,400);
+ const first=await run(api,planRoute,{lesson,count:8},a.cookie);
+ assert.equal(first.status,200);
+ assert.deepEqual(first.data.result,plan);
+ const second=await run(api,'deck/experiment/slide',{lesson,plan,index:0},a.cookie);
+ assert.equal(second.status,200);
+ assert.deepEqual(second.data.result,scene);
+ assert.equal(calls,2);
+ assert.equal(pptStore.data.size,0);
+ assert.equal((await run(api,'deck/plan',{lesson,count:8},a.cookie)).status,410);
+});
 test('PPT submission pins account billing; worker model and review use that key, never a deployment fallback',async()=>{
  const cloudStore=new Store(),store=new Store(),cloud=createCloudApi(cloudStore),a=await register(cloud,'pptalice'),b=await register(cloud,'pptbob'),billing=createUserModel(cloudStore,{vaultSecret,fetcher:balanceFetcher});
  await run(billing.handle,'cloud/model',{apiKey:keyA},a.cookie);await run(billing.handle,'cloud/model',{apiKey:keyB},b.cookie);
