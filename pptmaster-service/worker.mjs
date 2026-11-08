@@ -11,7 +11,7 @@ const HERE=path.dirname(fileURLToPath(import.meta.url));
 const SKILL=path.resolve(process.env.PPTMASTER_SKILL_DIR||'/opt/pptmaster/skills/ppt-master');
 const BASE=process.env.QIZHI_ORIGIN||'https://qizhi-wuhaozhe.netlify.app';
 const COMMIT='3c956467cd053fec36816cb7d2ca973729a5d4d1';
-const RUNNER_REVISION='classroom-design-native-preview-1';
+const RUNNER_REVISION='queue-startup-claim-1';
 const overflow=createOverflow({base:BASE,origin:'https://qizhi-learning-lab.onrender.com',
  directory:path.join(os.tmpdir(),'qizhi-overflow-jobs')});
 const draftDirectory=path.join(os.tmpdir(),'qizhi-ppt-drafts');
@@ -162,6 +162,27 @@ function visualIssues(plan,drafts){
 
 class PageOutputError extends Error {}
 
+function planText(value,limit=600){
+ const content=Array.isArray(value)?value.filter(line=>typeof line==='string').join('\n'):value;
+ return typeof content==='string'?content.trim().slice(0,limit):'';
+}
+
+function preparePlan(result,count,defaultDirection){
+ if(!Array.isArray(result?.pages)||result.pages.length!==count){
+  throw new PageOutputError('整稿纲要页数与制作要求不符');
+ }
+ const pages=result.pages.map((page,index)=>{
+  const text=planText(typeof page==='string'?page:page?.projectedText);
+  const title=planText(page?.title)||text.split('\n')[0];
+  if(!title)throw new PageOutputError('整稿纲要缺少第 '+(index+1)+' 页内容');
+  const composition=planText(page?.composition);
+  return {title,projectedText:text||title,composition,
+   visual:['scene','diagram','focus'].includes(page?.visual)?page.visual:'focus',
+   visualBrief:planText(page?.visualBrief)||composition};
+ });
+ return {direction:planText(result.direction,1200)||defaultDirection,pages};
+}
+
 function parseOutput(response,name){
  if(response.finishReason==='length')throw new PageOutputError('模型输出被截断');
  try{
@@ -297,21 +318,11 @@ async function executeJob(job){
   let plan;
   for(let attempt=0;attempt<2;attempt++){
    try{
-    plan=await model(planOutput,planMessages);
-    const requiredVisuals=illustrated?'scene':'diagram';
-    if(typeof plan?.direction!=='string'||!plan.direction.trim()||plan.direction.length>1200||
-       !Array.isArray(plan.pages)||plan.pages.length!==job.count||
-       plan.pages.some(page=>!['scene','diagram','focus'].includes(page?.visual)||
-        ['title','projectedText','composition','visualBrief'].some(key=>
-         typeof page[key]!=='string'||!page[key].trim()||page[key].length>600))||
-       plan.pages[0].visual==='focus'||!plan.pages.slice(1).some(page=>page.visual===requiredVisuals)){
-     throw new PageOutputError('整稿纲要不完整');
-    }
+    plan=preparePlan(await model(planOutput,planMessages),job.count,designDirection);
     break;
    }catch(error){
     if(!canRetry(error)||attempt)throw error;
-    planMessages[1].content=JSON.stringify({retry:'请按工具字段提交整稿方向和严格 '+job.count+' 页的逐页纲要。'+
-     (illustrated?'至少封面和一个关键教学页有主视觉，其中关键教学页使用 scene。':'封面有主视觉，至少一个教学页使用 diagram。'),...brief});
+    planMessages[1].content=JSON.stringify({retry:'请按工具字段提交整稿方向和严格 '+job.count+' 页的逐页纲要，每页至少给出标题和教学内容。',...brief});
    }
   }
 
@@ -585,5 +596,7 @@ else{
   if(await overflow.handle(req,res,wake))return;
   const draft=req.method==='GET'&&req.url?.match(/^\/api\/ppt\/drafts\/([a-f0-9]{32})(?:\/(deck\.pptx|page-\d{2}\.png|audit\.json))?$/);
   if(draft)return serveTemporaryDraft(req,res,draft);
-  if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,revision:RUNNER_REVISION,integrity:true,busy,previewFont:previewFont.stdout.trim(),publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');wake();return;}res.writeHead(404);res.end('Not found');});server.listen(Number(process.env.PORT)||3000,'0.0.0.0');
+  if(req.url==='/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({engine:'ppt-master',sourceCommit:COMMIT,revision:RUNNER_REVISION,integrity:true,busy,previewFont:previewFont.stdout.trim(),publicKey:servicePublicKey,keyId:serviceKeyId}));}if(req.url==='/v1/wake'&&req.method==='POST'){res.writeHead(202,{'content-type':'application/json'});res.end('{"accepted":true}');wake();return;}res.writeHead(404);res.end('Not found');});
+ // A request can wake the service without reaching the POST handler during a cold start.
+ server.listen(Number(process.env.PORT)||3000,'0.0.0.0',wake);
 }
