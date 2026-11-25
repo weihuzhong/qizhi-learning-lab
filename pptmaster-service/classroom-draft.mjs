@@ -1,115 +1,247 @@
-const profiles={
- young:{label:'幼儿园与小学低年级',guide:'每页一个动作或问题。用大字、鲜明暖色和贴合课题的可编辑插画；多画具体物体、人物动作、配对和对照。正文只保留两到三句短句，说明放在教师备注。',paper:'#FFF7E3',ink:'#193455',accent:'#087482',wash:'#E4F3F8',pop:'#F4AB43',body:36},
- primary:{label:'小学中高年级',guide:'用标注式插图、分步实验图和简单表格。每个插图配一个观察或解释问题，每页三到四个短要点。',paper:'#F1FAF5',ink:'#1F3931',accent:'#13725A',wash:'#DCEFE4',pop:'#EBAA55',body:32},
- middle:{label:'初中',guide:'用概念关系、实验变量和流程图解释原理，减少装饰。先展示证据，再用问题要求解释或迁移。',paper:'#F5F7FC',ink:'#182D45',accent:'#284D80',wash:'#E4EBF7',pop:'#6986BC',body:30},
- senior:{label:'高中及以上',guide:'优先使用假设、证据、推理和结论构成的严谨图表，区分事实与待验证猜想。使用低饱和配色，保留必要的术语、比较条件和资料来源。',paper:'#F7F5F0',ink:'#23292E',accent:'#395057',wash:'#E6EBEB',pop:'#7A918D',body:30},
+const profiles = {
+  young: {
+    label: '幼儿园与小学低年级',
+    guide: '每页只交代一个动作或问题，用大字和贴合课题的情境图。教学步骤和提示放在备注。',
+    paper: '#FBF2E2', ink: '#263441', accent: '#265D58', pale: '#EFE4C9', body: 39,
+  },
+  primary: {
+    label: '小学中高年级',
+    guide: '用题目相关的观察素材、实验步骤和对照。让学生先预测和记录，再根据证据解释。',
+    paper: '#F7F4EA', ink: '#20382F', accent: '#275445', pale: '#E6EADC', body: 34,
+  },
+  middle: {
+    label: '初中',
+    guide: '用概念关系、实验变量和流程图解释原理。先展示证据，再提问。',
+    paper: '#F2F5F8', ink: '#202F43', accent: '#304F72', pale: '#DFE9F1', body: 32,
+  },
+  senior: {
+    label: '高中及以上',
+    guide: '围绕假设、证据和推理安排可比较的图表，区分观察结果与待验证猜想。',
+    paper: '#F5F4EF', ink: '#232E34', accent: '#3A5158', pale: '#E5EBE8', body: 30,
+  },
 };
 
-export function classroomProfile(brief={}){
- const grade=String(brief.grade||'');
- const detected=/高中|高[一二三]|大学|成人|十[一二]?年级|(?:10|11|12)年级/.test(grade)?'senior':
-  /幼儿|学前|小班|中班|大班|低年级|[一二三123]年级|(?:^|[^0-9])[3-8]岁/.test(grade)?'young':
-  /初中|初[一二三]|[七八九789]年级/.test(grade)?'middle':'primary';
- return profiles[Object.hasOwn(profiles,brief.audience)?brief.audience:detected];
+export function classroomProfile(brief = {}) {
+  const grade = String(brief.grade || '');
+  const detected = /高中|高[一二三]|大学|成人|十[一二]?年级|(?:10|11|12)年级/.test(grade) ? 'senior'
+    : /幼儿|学前|小班|中班|大班|低年级|小学低段|[一1][至到-][三3]年级|(?:^|[^至到])(?:[一二三]|[123])年级|(?:^|[^0-9])[3-8]岁/.test(grade) ? 'young'
+    : /初中|初[一二三]|[七八九789]年级/.test(grade) ? 'middle' : 'primary';
+  return profiles[Object.hasOwn(profiles, brief.audience) ? brief.audience : detected];
 }
 
-const xml=value=>String(value||'').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\uD800-\uDFFF]/gu,'')
- .replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
-const clean=value=>String(value||'').replace(/\s+/g,' ').trim();
-const rect=(x,y,w,h,fill,rx=0)=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}"/>`;
-const circle=(x,y,r,fill)=>`<circle cx="${x}" cy="${y}" r="${r}" fill="${fill}"/>`;
-const line=(x,y,x2,y2,stroke,width=5)=>`<line x1="${x}" y1="${y}" x2="${x2}" y2="${y2}" stroke="${stroke}" stroke-width="${width}" stroke-linecap="round"/>`;
-const group=(name,bounds,children)=>`<g id="${name}" data-pptx-bounds="${bounds}">${children}</g>`;
-function text(value,x,y,size,color,bold=false){
- return `<text x="${x}" y="${y}" font-family="Microsoft YaHei" font-size="${size}" fill="${color}"${bold?' font-weight="bold"':''}>${xml(value)}</text>`;
-}
-function lines(value,width,limit){
- const input=Array.from(clean(value)),out=[];
- for(let i=0;i<input.length&&out.length<limit;i+=width){
-  const last=out.length===limit-1&&i+width<input.length;
-  out.push(input.slice(i,i+width-(last?1:0)).join('')+(last?'…':''));
- }
- return out;
-}
-function illustration(topic,profile,n,kind){
- const {wash,accent,pop}=profile;
- const base=rect(872,242,316,334,wash,24);
- if(profile===profiles.senior){
-  return base+['条件','证据','结论'].map((label,index)=>{
-   const y=290+index*80;
-   return rect(910,y,240,54,index===n%3?accent:profile.paper,8)+
-    text(label,940,y+37,26,index===n%3?'#FFFFFF':profile.ink,true);
-  }).join('');
- }
- if(profile===profiles.middle){
-  const labels=/实验|科学|纸桥|观察|沉浮|物理|化学/.test(topic)?['比较条件','观察记录','解释结果']:['概念','联系','应用'];
-  return base+line(912,309,912,506,accent,5)+labels.map((label,index)=>{
-   const y=283+index*86;
-   return circle(912,y+28,9,index===n%3?pop:accent)+rect(934,y,220,56,profile.paper,6)+
-    text(label,950,y+37,25,profile.ink,true);
-  }).join('');
- }
- if(/纸桥/.test(topic)&&kind!=='ending'){
-  const scenery=profile===profiles.young?circle(945,320,26,pop)+circle(1118,315,13,profile.paper)+
-   circle(1137,319,15,profile.paper)+rect(1105,320,48,9,profile.paper,4):'';
-  return base+scenery+rect(903,423,54,78,accent,4)+rect(1102,423,54,78,accent,4)+
-   '<polygon points="911,413 946,387 1114,387 1148,413 1148,431 911,431" fill="'+pop+'"/>'+
-   line(954,413,1105,413,accent,4)+circle(1029,356,21,accent);
- }
- if(/沉浮|沉与浮/.test(topic)&&kind!=='ending'){
-  return base+rect(908,401,244,104,accent,12)+rect(916,414,228,70,profile.paper,8)+
-   line(932,430,1126,430,pop,5)+rect(1006,346,50,60,pop,8);
- }
- if(/阅读|语文|故事|诗|绘本|写作|词/.test(topic)){
-  return base+rect(910,330,112,154,accent,8)+rect(1025,330,124,154,pop,8)+
-   line(1024,326,1024,497,accent,4)+[368,397,426].map(y=>line(934,y,1002,y,wash,4)+line(1050,y,1127,y,wash,4)).join('');
- }
- if(/分数|图形|形状|数学|几何|数量/.test(topic)){
-  return base+circle(1029,396,94,pop)+line(935,396,1123,396,accent,6)+line(1029,302,1029,490,accent,6)+
-   rect(932,516,194,16,accent,8);
- }
- if(/实验|科学|观察|生物|植物|浮|桥|物理|化学/.test(topic)&&n%2===1){
-  return base+circle(1012,385,73,pop)+circle(1012,385,52,wash)+line(1066,440,1122,503,accent,15)+
-   circle(1012,385,14,accent)+line(982,385,1042,385,accent,4)+line(1012,355,1012,415,accent,4);
- }
- if(kind==='cover'||profile===profiles.young){
-  return base+circle(970,347,52,pop)+rect(1029,390,102,102,accent,12)+
-   line(965,446,965,505,accent,8)+circle(965,517,13,accent)+
-   circle(1091,328,19,pop);
- }
- return base+[0,1,2].map(i=>rect(916,310+i*70,218-i*32,38,i===n%3?pop:accent,8)).join('');
+const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+const xml = value => String(value ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\uD800-\uDFFF]/gu, '')
+  .replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char]);
+const rect = (x, y, width, height, fill) => `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${fill}"/>`;
+const group = (name, bounds, children) => `<g id="${name}" data-pptx-bounds="${bounds}">${children}</g>`;
+const textBox = (content, x, y, size, color, bold) =>
+  `<text x="${x}" y="${y}" font-size="${size}" fill="${color}"${bold ? ' font-weight="bold"' : ''}>${content}</text>`;
+const text = (value, x, y, size, color, bold = false) =>
+  textBox(xml(value), x, y, size, color, bold);
+
+// Reserve width for font differences in PowerPoint and LibreOffice. Keep
+// punctuation with the previous line and fit the slide, not the complete notes.
+function wrap(value, width, size) {
+  const max = width / size * 0.91;
+  const rows = [];
+  let row = '';
+  let used = 0;
+  for (const char of clean(value)) {
+    const units = /[\x20-\x7e]/.test(char) ? 0.62 : 1.04;
+    if (row && used + units > max && !/[，。；、？！：）】」》]/.test(char)) {
+      rows.push(row.trim());
+      row = '';
+      used = 0;
+    }
+    row += char;
+    used += units;
+  }
+  if (row) rows.push(row.trim());
+  return rows;
 }
 
-export function classroomPage(job,number){
- const {lesson,count}=job,profile=classroomProfile(job.brief);
- const young=profile===profiles.young;
- const phaseIndex=number>2&&number<count?Math.min(lesson.phases.length-1,Math.floor((number-3)*lesson.phases.length/Math.max(1,count-3))):0;
- const phase=lesson.phases[phaseIndex];
- const compact=count===4&&number===3;
- const selected=compact?lesson.phases.map(p=>p.name+'：'+p.student):[phase?.student,phase?.check].filter(Boolean);
- const cover=number===1,last=number===count,goals=number===2;
- const kind=cover?'cover':last?'ending':'content';
- const title=cover?lesson.title:last?(young?'说一说，试一试':'回顾与练习'):goals?(young?'今天要做什么':'这节课要学什么'):compact?'课堂活动':phase?.name||'课堂活动';
- const entries=cover?lesson.objectives.slice(0,1):last?[...(lesson.assessment||[]),...(lesson.homework||[])]:goals?lesson.objectives:selected;
- const detail=entries.map(clean).filter(Boolean);
- const titleLines=lines(title,22,2);
- const body=detail.slice(0,3).flatMap((item,i)=>lines((detail.length>1?(i+1)+'  ':'')+item,young?16:21,2));
- const note=[lesson.title+' · '+title,
-  ...(cover||goals?lesson.objectives:last?[...lesson.assessment,...lesson.homework]:
-   compact?lesson.phases.map(p=>p.name+'：'+p.teacher+'；'+p.student+'；'+p.check):
-   [phase?.teacher,phase?.student,phase?.check]),'请根据教材和学生实际情况核对后使用。'].filter(Boolean).join('\n');
- const heading=text((clean(job.brief?.grade).slice(0,24)||profile.label)+'课堂',90,75,24,profile.accent,true)+
-  titleLines.map((item,i)=>text(item,90,132+i*49,44,profile.ink,true)).join('');
- const contentX=young?532:82,textX=contentX+28;
- const content=rect(contentX,242,young?656:746,334,profile.wash,24)+
-  text(cover?'今天的任务':last?'想一想，做一做':goals?'学习目标':'观察与行动',textX,296,24,profile.accent,true)+
-  body.map((item,i)=>text(item,textX,350+i*39,profile.body,profile.ink)).join('');
- const visual=illustration(lesson.title+' '+(job.brief?.subject||''),profile,number,kind);
- const footer=text('启知未来  ·  课堂初稿',90,664,20,profile.accent)+text(number+' / '+count,1098,664,20,profile.accent);
- const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="${kind}" font-family="Microsoft YaHei">`+
-  rect(0,0,1280,720,profile.paper)+group('heading','64 38 1152 167',heading)+
-  (young?group('visual','64 224 444 386','<g transform="translate(-1010 -47) scale(1.25 1.12)">'+visual+'</g>')+
-   group('content','516 224 690 386',content):group('content','64 224 784 370',content)+group('visual','854 224 352 370',visual))+
-  group('footer','64 620 1152 74',footer)+'</svg>';
- return {number,svg,notes:note.slice(0,1500)};
+function fit(value, width, size, limit) {
+  const rows = wrap(value, width, size);
+  if (rows.length <= limit) return rows;
+  const sentences = clean(value).match(/[^。！？；]+[。！？；]*/g) || [];
+  let excerpt = '';
+  for (const sentence of sentences) {
+    const next = excerpt + sentence;
+    if (wrap(next, width, size).length > limit) break;
+    excerpt = next;
+  }
+  if (excerpt) return wrap(excerpt, width, size);
+  return [...rows.slice(0, limit - 1), Array.from(rows[limit - 1]).slice(0, -2).join('') + '…'];
+}
+
+function block(rows, x, y, size, spacing, color, bold = false) {
+  if (!rows.length) return '';
+  const [first, ...rest] = rows;
+  const content = xml(first) + rest.map(row => `<tspan x="${x}" dy="${spacing}">${xml(row)}</tspan>`).join('');
+  return textBox(content, x, y, size, color, bold);
+}
+const phaseNotes = phase => [
+  phase.name + '（' + phase.minutes + ' 分钟）',
+  '教师指导：' + phase.teacher,
+  '学生活动：' + phase.student,
+  '观察与评价：' + phase.check,
+].join('\n');
+function projectedQuestion(phase) {
+  if (!/出口题|提问|讨论|迁移|猜想|预测/.test(phase.name)) return undefined;
+  return clean(phase.teacher).match(/[“「"]([^”」"]+[？?])[”」"]/u)?.[1];
+}
+
+function cover(lesson, brief, profile, asset) {
+  const { ink, accent } = profile;
+  // The existing paper-bridge asset is a 4:3 illustrative photograph.
+  const hasPhoto = asset?.href === '../images/paper-bridge.jpg';
+  const width = hasPhoto ? 462 : 1060;
+  const titleSize = hasPhoto ? 70 : 76;
+  const heading = fit(lesson.title, width, titleSize, 4);
+  const context = [brief?.grade || profile.label, brief?.subject].filter(Boolean).join(' · ');
+  const photo = hasPhoto
+    ? group('main-visual', '558 90 654 490', `<image href="${asset.href}" x="558" y="90" width="652" height="489"/>`)
+    : '';
+  return group('cover-title', hasPhoto ? '68 106 478 478' : '68 106 1144 478',
+    rect(76, 133, 52, 6, accent)
+    + block(fit(context, width, 25, 2), 76, 188, 25, 33, accent)
+    + block(heading, 76, 292, titleSize, titleSize + 13, ink, true))
+    + photo;
+}
+
+function goals(lesson, profile) {
+  const { ink, accent, pale, body } = profile;
+  const entries = lesson.objectives.map(clean).filter(Boolean).slice(0, 3);
+  const size = entries.length === 1 ? body + 10 : Math.min(body + 1, 38);
+  const spacing = entries.length > 1 ? 146 : 0;
+  return group('heading', '68 57 1144 116', text('学习目标', 76, 142, 60, ink, true))
+    + group('goals', '68 200 1144 440', entries.map((value, index) => {
+      if (entries.length === 1) {
+        return rect(76, 224, 52, 4, accent)
+          + block(fit(value, 1060, size, 5), 76, 324, size, size + 15, ink);
+      }
+      const y = 258 + index * spacing;
+      return rect(76, y - 46, 1100, 2, pale)
+        + text(String(index + 1).padStart(2, '0'), 76, y + 8, 27, accent, true)
+        + block(fit(value, 968, size, entries.length > 1 ? 2 : 5), 175, y + 10, size, 54, ink);
+    }).join(''));
+}
+
+function activities(phases, part, parts, profile) {
+  const { ink, accent, pale, paper, body } = profile;
+  if (phases.length > 1) {
+    const groups = phases.length > 3 ? phases.slice(0, 3) : phases;
+    const col = Math.floor(1130 / groups.length);
+    return group('heading', '68 57 1144 116', text(phases.length > 3 ? '课堂活动预览' : '课堂活动', 76, 142, 60, ink, true))
+      + group('activity-sequence', '68 202 1144 438', groups.map((phase, i) => {
+        const x = 76 + i * col;
+        return rect(x, 224, col - 27, 3, accent)
+          + block(fit(phase.name, col - 40, 33, 2), x, 296, 33, 44, accent, true)
+          + block(fit(phase.student, col - 40, Math.min(body, 32), 5), x, 414, Math.min(body, 32), 43, ink);
+      }).join(''));
+  }
+  const phase = phases[0];
+  const studentTask = clean(phase.student);
+  const question = projectedQuestion(phase);
+  if (parts === 1 && question) {
+    return group('heading', '68 53 1144 110', text(phase.name, 76, 124, 32, accent, true))
+      + group('question', '68 190 1144 246', rect(76, 216, 52, 5, accent)
+        + block(fit(question, 1070, 62, 2), 76, 333, 62, 75, ink, true))
+      + group('student-task', '68 463 1144 175',
+        block(fit(studentTask, 1060, body, 3), 76, 510, body, body + 10, ink));
+  }
+  if (parts === 1 && phase.name === '公平比较' && /保持不变.{0,4}改变/.test(studentTask)) {
+    const fixed = clean(phase.teacher).match(/保持(.{1,32}?)一致[。；，]?$/)?.[1];
+    if (fixed) {
+      return group('heading', '68 57 1144 116', text('公平比较', 76, 142, 60, ink, true))
+        + group('question', '68 205 1144 100', text('怎样确保两次测试可以比较？', 76, 268, 39, ink))
+        + group('comparison', '68 340 1144 300', rect(76, 364, 1100, 3, accent)
+          + text('保持不变', 76, 436, 34, accent, true)
+          + block(fit(fixed.replace(/、(.+)和/, '、$1、'), 540, 33, 3), 76, 524, 33, 45, ink)
+          + rect(640, 390, 2, 225, pale)
+          + text('只改变什么？', 704, 436, 34, accent, true)
+          + block(['选出要测试的一项，', '说说你的理由。'], 704, 525, 37, 46, ink));
+    }
+  }
+  if (parts === 1 && /测试|实验/.test(phase.name)) {
+    const steps = clean(phase.teacher).match(/组织测试([^，。；]+)[，；](逐[个位][^，。；]+)/u);
+    if (steps) {
+      const directions = ['分别测试' + steps[1].replace('、', '和'), steps[2], studentTask];
+      return group('heading', '68 57 1144 116', text(phase.name, 76, 142, 60, ink, true))
+        + group('experiment-steps', '68 198 1144 442', directions.map((value, index) => {
+          const y = 245 + index * 132;
+          return rect(76, y - 30, 1100, 2, pale)
+            + text(String(index + 1).padStart(2, '0'), 76, y + 18, 28, accent, true)
+            + block(fit(value, 930, body, 2), 175, y + 18, body, body + 10, ink);
+        }).join(''));
+    }
+  }
+  const steps = studentTask.match(/[^。！？；]+[。！？；]*/g) || [studentTask];
+  const from = Math.floor(part * steps.length / parts);
+  const to = Math.floor((part + 1) * steps.length / parts);
+  const task = to > from ? steps.slice(from, to).join('') : studentTask;
+  const focus = /预测|猜想|提问|导入|交流|讨论|反思/.test(phase.name);
+  const mainSize = focus ? Math.max(body + 16, 46) : body + 6;
+  const label = parts > 1 ? phase.name + ' · ' + (part + 1) + '/' + parts : phase.name;
+  return group('heading', '68 52 1144 160',
+    block(fit(label, 1100, focus ? 31 : 55, 2), 76, focus ? 122 : 135, focus ? 31 : 55, 62, focus ? pale : ink, true))
+    + group('student-task', '68 226 1144 419',
+      rect(76, 250, focus ? 48 : 1080, 3, focus ? pale : accent)
+      + block(fit(task, 1050, mainSize, 5), 76, 340, mainSize, mainSize + 14, focus ? paper : ink, focus));
+}
+
+function closing(lesson, profile) {
+  const { ink, accent, pale, body } = profile;
+  const homework = lesson.homework.map(clean).find(Boolean);
+  const objective = lesson.objectives.map(clean).find(Boolean);
+  const action = homework || objective;
+  const heading = homework ? '课后任务' : '课堂回顾';
+  const size = body + 14;
+  return group('heading', '68 53 1144 125', text(heading, 76, 143, 56, accent, true))
+    + group('closing-task', '68 210 1144 428',
+      rect(76, 236, 54, 5, accent)
+      + block(fit(action, 1030, size, 5), 76, 332, size, size + 13, ink, true));
+}
+
+export function classroomPage(job, number, asset) {
+  const { lesson, count, brief = {} } = job;
+  const profile = classroomProfile(brief);
+  const opening = number === 1;
+  const ending = number === count;
+  let background = profile.paper;
+  let artwork;
+  let notes;
+
+  if (opening) {
+    artwork = cover(lesson, brief, profile, asset);
+    notes = [lesson.title, ...lesson.preparation,
+      asset ? '题图为纸桥示意图，用于导入，不代表实际课堂或实验结果。' : ''].filter(Boolean);
+  } else if (number === 2) {
+    artwork = goals(lesson, profile);
+    notes = [...lesson.objectives, ...(lesson.keypoints || []), ...(lesson.difficulties || [])];
+  } else if (ending) {
+    background = profile.pale;
+    artwork = closing(lesson, profile);
+    notes = [...lesson.assessment, ...lesson.homework];
+  } else {
+    const index = number - 3;
+    const slots = count - 3;
+    const length = lesson.phases.length;
+    const phaseIndex = Math.floor(index * length / slots);
+    const nextIndex = Math.floor((index + 1) * length / slots);
+    const phases = lesson.phases.slice(phaseIndex, Math.max(phaseIndex + 1, nextIndex));
+    const first = Math.ceil(phaseIndex * slots / length);
+    const last = Math.ceil((phaseIndex + 1) * slots / length);
+    if (phases.length === 1 && !(last - first === 1 && projectedQuestion(phases[0]))
+      && /预测|猜想|提问|导入|交流|讨论|反思/.test(phases[0].name)) background = profile.accent;
+    artwork = activities(phases, index - first, Math.max(1, last - first), profile);
+    notes = phases.map(phaseNotes);
+  }
+
+  const role = opening ? 'cover' : ending ? 'ending' : 'content';
+  const footer = opening ? '' : group('page-number', '1130 650 84 44',
+    text(String(number).padStart(2, '0'), 1163, 681, 21, background === profile.accent ? profile.pale : profile.accent));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" data-pptx-page-role="${role}" font-family="Microsoft YaHei">`
+    + rect(0, 0, 1280, 720, background) + artwork + footer + '</svg>';
+  return { number, svg, notes: notes.map(note => String(note || '').trim()).filter(Boolean).join('\n\n') || lesson.title };
 }
