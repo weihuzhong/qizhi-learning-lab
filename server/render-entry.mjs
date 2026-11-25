@@ -13,16 +13,36 @@ const legacyBackend = 'https://qizhi-wuhaozhe.netlify.app';
 const databaseEnabled = process.env.QIZHI_DATA_BACKEND === 'supabase';
 const readOnly = process.env.QIZHI_MIGRATION_READ_ONLY === '1';
 const warmPptRunner = createPptWake(pptRunner);
-let localApi;
-if (databaseEnabled) {
+let verifiedApi;
+let verification;
+let retryAfter = 0;
+
+async function verifyCloudStorage() {
   const vaultSecret = process.env.USER_MODEL_VAULT_SECRET;
   if (!vaultSecret || vaultSecret.length < 24) throw Error('缺少个人密钥保险箱配置');
   const stores = createSupabaseStores(process.env);
   const migration = await stores.cloudStore.get(migrationKey);
   if (migration?.verified !== true || !/^[a-f0-9]{64}$/.test(migration.manifest)) throw Error('旧数据导入尚未验证，拒绝切换正式接口');
-  localApi = createAppApi({ ...stores, vaultSecret, model: process.env.LLM_MODEL || 'deepseek-flash',
+  return createAppApi({ ...stores, vaultSecret, model: process.env.LLM_MODEL || 'deepseek-flash',
     requestPptWake: readOnly ? undefined : warmPptRunner });
 }
+
+// Serve the homepage immediately. Cloud requests still require a verified
+// migration, and must never be sent to the legacy store during an outage.
+async function getVerifiedApi() {
+  if (verifiedApi) return verifiedApi;
+  if (Date.now() < retryAfter) return null;
+  verification ??= verifyCloudStorage()
+    .then(handler => { verifiedApi = handler; return handler; })
+    .catch(() => {
+      retryAfter = Date.now() + 5000;
+      console.warn('Supabase storage verification unavailable. Cloud routes will retry.');
+      return null;
+    })
+    .finally(() => { verification = undefined; });
+  return verification;
+}
+
 const port = Number(process.env.PORT || 10000);
 const origin = new URL(process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port).origin;
 const apiRoute = /^\/api\/(?:status$|chat$|lesson(?:\/|$)|cloud\/|deck\/|ppt\/)/;
@@ -53,7 +73,7 @@ function bodyLimit(path) {
   return 90000;
 }
 
-async function forwardApi(req, res, url) {
+async function forwardApi(req, res, url, localApi) {
   const overflowJob = /^\/api\/ppt\/jobs\/r-[a-f0-9]{32}(?:\/(?:cancel|wake|file\/(?:deck\.pptx|page-\d{2}\.png|audit\.json)))?$/.test(url.pathname);
   const headers = new Headers();
   for (const name of ['content-type', 'accept']) {
@@ -156,10 +176,21 @@ createServer(async (req, res) => {
     const url = new URL(req.url, origin);
     if (url.origin !== origin) return json(res, 400, { error: '请求地址无效' });
     if (!['GET', 'HEAD', 'POST'].includes(req.method)) return json(res, 405, { error: '不支持的请求方法' });
-    if (req.method === 'GET' && url.pathname === '/healthz') return json(res, 200, { ok: true, dataBackend: localApi ? 'supabase' : 'netlify', writesPaused: readOnly });
+    if (req.method === 'GET' && url.pathname === '/healthz') {
+      return json(res, 200, {
+        ok: true,
+        dataBackend: databaseEnabled ? 'supabase' : 'netlify',
+        storageVerified: databaseEnabled ? Boolean(verifiedApi) : undefined,
+        writesPaused: readOnly,
+      });
+    }
     const worker = url.pathname.startsWith('/api/ppt/worker/');
-    if (apiRoute.test(url.pathname) && (!worker || (localApi && req.method === 'POST'))) {
-      return await forwardApi(req, res, url);
+    if (apiRoute.test(url.pathname) && (!worker || (databaseEnabled && req.method === 'POST'))) {
+      const localApi = databaseEnabled ? await getVerifiedApi() : undefined;
+      if (databaseEnabled && !localApi) {
+        return json(res, 503, { error: '云端存储暂不可用，请稍后重试' });
+      }
+      return await forwardApi(req, res, url, localApi);
     }
     const asset = assets.get(url.pathname);
     if (!asset || req.method === 'POST') return json(res, 404, { error: '页面不存在' });
